@@ -795,15 +795,36 @@ async def _get_github_branches(owner: str, repo: str) -> dict[str, Any]:
 
 
 async def _get_github_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
-    """Get GitHub commit details via API."""
+    """Get GitHub commit details via API (optimized for token efficiency)."""
     client = GitHubClient(owner=owner, repo=repo)
     commit = await client.get_commit(sha)
+
+    # Remove patch data to reduce token usage (can be very large)
+    # Keep only file metadata
+    files_summary = [
+        {
+            "path": f["path"],
+            "status": f["status"],
+            "additions": f["additions"],
+            "deletions": f["deletions"],
+            # Omit "patch" - too verbose
+        }
+        for f in commit.get("files", [])[:20]  # Limit to 20 files
+    ]
 
     return {
         "success": True,
         "owner": owner,
         "repo": repo,
-        **commit,
+        "sha": commit["sha"],
+        "message": _truncate(commit["message"], 500),
+        "author": commit["author"],
+        "committer": commit["committer"],
+        "parents": commit["parents"],
+        "stats": commit["stats"],
+        "html_url": commit["html_url"],
+        "total_files": len(commit.get("files", [])),
+        "files": files_summary,
     }
 
 
@@ -825,23 +846,57 @@ async def _get_github_file_history(
 
 
 async def _get_github_file(owner: str, repo: str, path: str, ref: str | None) -> dict[str, Any]:
-    """Get file contents via GitHub API."""
+    """Get file contents via GitHub API (with size limit for token efficiency)."""
     client = GitHubClient(owner=owner, repo=repo)
     file_data = await client.get_file_contents(path, ref=ref)
 
-    return {
+    # Truncate large files to prevent token explosion
+    MAX_CONTENT_SIZE = 10000  # ~10KB
+    content = file_data.get("content", "")
+    is_truncated = False
+    if len(content) > MAX_CONTENT_SIZE:
+        content = content[:MAX_CONTENT_SIZE] + "\n... [truncated - file too large]"
+        is_truncated = True
+
+    result = {
         "success": True,
         "owner": owner,
         "repo": repo,
         "ref": ref,
-        **file_data,
+        "type": file_data.get("type"),
+        "path": file_data.get("path"),
+        "name": file_data.get("name"),
+        "size": file_data.get("size"),
+        "html_url": file_data.get("html_url"),
     }
+
+    if file_data.get("type") == "file":
+        result["content"] = content
+        result["is_truncated"] = is_truncated
+    elif file_data.get("type") == "directory":
+        result["entries"] = file_data.get("entries", [])[:50]  # Limit directory entries
+
+    return result
+
+
+def _truncate(text: str | None, max_len: int = 500) -> str | None:
+    """Truncate text to reduce token usage."""
+    if not text:
+        return text
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "... [truncated]"
 
 
 async def _get_pr(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
-    """Get PR details via GitHub API."""
+    """Get PR details via GitHub API (optimized for token efficiency)."""
     client = GitHubClient(owner=owner, repo=repo)
     pr = await client.get_pull_request(pr_number)
+
+    # Limit and summarize to reduce token usage
+    MAX_COMMENTS = 10
+    MAX_REVIEWS = 5
+    MAX_REVIEW_COMMENTS = 10
 
     return {
         "success": True,
@@ -850,22 +905,17 @@ async def _get_pr(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
         "pr": {
             "number": pr.number,
             "title": pr.title,
-            "body": pr.body,
+            "body": _truncate(pr.body, 1000),  # Truncate long PR bodies
             "state": pr.state.value,
             "author": pr.author.login,
             "labels": [lbl.name for lbl in pr.labels],
             "assignees": [usr.login for usr in pr.assignees],
             "reviewers": [usr.login for usr in pr.reviewers],
             "created_at": pr.created_at.isoformat() if pr.created_at else None,
-            "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
-            "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
             "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
             "merged_by": pr.merged_by.login if pr.merged_by else None,
             "head_ref": pr.head_ref,
             "base_ref": pr.base_ref,
-            "head_sha": pr.head_sha,
-            "base_sha": pr.base_sha,
-            "merge_commit_sha": pr.merge_commit_sha,
             "is_merged": pr.is_merged,
             "additions": pr.additions,
             "deletions": pr.deletions,
@@ -873,46 +923,46 @@ async def _get_pr(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
             "commits_count": pr.commits_count,
             "linked_issues": pr.linked_issues,
             "html_url": pr.html_url,
+            # Counts for awareness
+            "total_comments": len(pr.comments),
+            "total_reviews": len(pr.reviews),
+            "total_review_comments": len(pr.review_comments),
+            # Limited data
             "comments": [
                 {
-                    "id": c.id,
                     "author": c.author.login,
-                    "body": c.body,
+                    "body": _truncate(c.body, 300),
                     "created_at": c.created_at.isoformat() if c.created_at else None,
-                    "path": c.path,
-                    "line": c.line,
                 }
-                for c in pr.comments
+                for c in pr.comments[:MAX_COMMENTS]
             ],
             "reviews": [
                 {
-                    "id": r.id,
                     "author": r.author.login,
                     "state": r.state.value,
-                    "body": r.body,
-                    "submitted_at": r.submitted_at.isoformat() if r.submitted_at else None,
+                    "body": _truncate(r.body, 200),
                 }
-                for r in pr.reviews
+                for r in pr.reviews[:MAX_REVIEWS]
             ],
             "review_comments": [
                 {
-                    "id": c.id,
                     "author": c.author.login,
-                    "body": c.body,
+                    "body": _truncate(c.body, 200),
                     "path": c.path,
                     "line": c.line,
-                    "commit_sha": c.commit_sha,
                 }
-                for c in pr.review_comments
+                for c in pr.review_comments[:MAX_REVIEW_COMMENTS]
             ],
         },
     }
 
 
 async def _get_issue(owner: str, repo: str, issue_number: int) -> dict[str, Any]:
-    """Get issue details via GitHub API."""
+    """Get issue details via GitHub API (optimized for token efficiency)."""
     client = GitHubClient(owner=owner, repo=repo)
     issue = await client.get_issue(issue_number)
+
+    MAX_COMMENTS = 10
 
     return {
         "success": True,
@@ -921,24 +971,22 @@ async def _get_issue(owner: str, repo: str, issue_number: int) -> dict[str, Any]
         "issue": {
             "number": issue.number,
             "title": issue.title,
-            "body": issue.body,
+            "body": _truncate(issue.body, 1000),
             "state": issue.state.value,
             "author": issue.author.login,
             "labels": [lbl.name for lbl in issue.labels],
             "assignees": [usr.login for usr in issue.assignees],
             "created_at": issue.created_at.isoformat() if issue.created_at else None,
-            "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
             "closed_at": issue.closed_at.isoformat() if issue.closed_at else None,
-            "comments_count": issue.comments_count,
+            "total_comments": issue.comments_count,
             "html_url": issue.html_url,
             "comments": [
                 {
-                    "id": c.id,
                     "author": c.author.login,
-                    "body": c.body,
+                    "body": _truncate(c.body, 300),
                     "created_at": c.created_at.isoformat() if c.created_at else None,
                 }
-                for c in issue.comments
+                for c in issue.comments[:MAX_COMMENTS]
             ],
         },
     }

@@ -8,7 +8,11 @@
       "Bash(uv run pytest:*)",
       "mcp__ctm__get_commit",
       "mcp__ctm__get_commit_diff",
-      "mcp__ctm__blame_with_context"
+      "mcp__ctm__blame_with_context",
+      "mcp__ctm__get_github_repo",
+      "mcp__ctm__get_github_file_history",
+      "mcp__ctm__get_github_commit",
+      "Bash(head:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
