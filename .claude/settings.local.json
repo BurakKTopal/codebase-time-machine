@@ -5,11 +5,14 @@
       "Bash(uv run python:*)",
       "Bash(uv run ruff:*)",
       "Bash(uv run black:*)",
-      "Bash(uv run pytest:*)"
+      "Bash(uv run pytest:*)",
+      "mcp__ctm__get_commit",
+      "mcp__ctm__get_commit_diff",
+      "mcp__ctm__blame_with_context"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "ctm"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }
