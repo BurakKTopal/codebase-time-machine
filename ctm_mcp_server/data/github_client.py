@@ -522,6 +522,76 @@ class GitHubClient:
             for b in data
         ]
 
+    async def get_tree(
+        self,
+        tree_sha: str = "HEAD",
+        recursive: bool = True,
+    ) -> dict:
+        """Get repository file tree.
+
+        Args:
+            tree_sha: Tree SHA or branch name (default: HEAD).
+            recursive: If True, get entire tree recursively.
+
+        Returns:
+            Tree structure with all files and directories.
+        """
+        # If using HEAD or branch name, first get the commit to find tree SHA
+        if tree_sha in ("HEAD", "main", "master") or not tree_sha.startswith(
+            ("a", "b", "c", "d", "e", "f", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+        ):
+            # Get default branch info
+            repo_data = await self._request("GET", self._repo_path(""))
+            default_branch = repo_data.get("default_branch", "main")
+
+            # Get branch commit
+            branch_data = await self._request(
+                "GET",
+                self._repo_path(f"/branches/{default_branch}"),
+            )
+            tree_sha = (
+                branch_data.get("commit", {}).get("commit", {}).get("tree", {}).get("sha", "")
+            )
+
+            if not tree_sha:
+                # Fallback: get from commit
+                commit_sha = branch_data.get("commit", {}).get("sha", "")
+                if commit_sha:
+                    commit_data = await self._request(
+                        "GET",
+                        self._repo_path(f"/git/commits/{commit_sha}"),
+                    )
+                    tree_sha = commit_data.get("tree", {}).get("sha", "")
+
+        params = {}
+        if recursive:
+            params["recursive"] = "1"
+
+        data = await self._request(
+            "GET",
+            self._repo_path(f"/git/trees/{tree_sha}"),
+            params=params,
+        )
+
+        # Process tree entries
+        entries = []
+        for item in data.get("tree", []):
+            entries.append(
+                {
+                    "path": item.get("path", ""),
+                    "type": "dir" if item.get("type") == "tree" else "file",
+                    "size": item.get("size", 0) if item.get("type") == "blob" else None,
+                    "sha": item.get("sha", ""),
+                }
+            )
+
+        return {
+            "sha": data.get("sha", ""),
+            "truncated": data.get("truncated", False),
+            "total_entries": len(entries),
+            "entries": entries,
+        }
+
     async def search_code(
         self,
         query: str,

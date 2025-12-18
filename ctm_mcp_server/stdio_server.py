@@ -296,6 +296,11 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Git ref (branch, tag, or SHA). Defaults to default branch.",
                     },
+                    "max_size": {
+                        "type": "integer",
+                        "description": "Maximum content size in bytes before truncation (default: 50000 = 50KB, use 0 for no limit)",
+                        "default": 50000,
+                    },
                 },
                 "required": ["owner", "repo", "path"],
             },
@@ -520,6 +525,238 @@ async def list_tools() -> list[Tool]:
                 "required": ["owner", "repo", "path", "symbol_name"],
             },
         ),
+        # Analysis tools - Phase C
+        Tool(
+            name="get_code_context",
+            description="Trace the full decision chain for code: file commits → PRs → linked issues. Answers 'Why does this code exist?' by aggregating all context.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to repo root",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to analyze (default: 10)",
+                        "default": 10,
+                    },
+                },
+                "required": ["owner", "repo", "path"],
+            },
+        ),
+        Tool(
+            name="get_code_owners",
+            description="Find who knows this code best by analyzing commit history. Returns contributors ranked by number of commits, lines changed, and recency.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory path relative to repo root",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to analyze (default: 100)",
+                        "default": 100,
+                    },
+                },
+                "required": ["owner", "repo", "path"],
+            },
+        ),
+        Tool(
+            name="get_change_coupling",
+            description="Find files that frequently change together with the target file. Reveals hidden dependencies and architectural relationships.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path to analyze",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to analyze (default: 50)",
+                        "default": 50,
+                    },
+                    "min_coupling": {
+                        "type": "number",
+                        "description": "Minimum coupling ratio (0-1) to include (default: 0.3)",
+                        "default": 0.3,
+                    },
+                },
+                "required": ["owner", "repo", "path"],
+            },
+        ),
+        Tool(
+            name="get_activity_summary",
+            description="Get aggregated summary of repository activity: commits by type (bugfix/feature/etc), top contributors, most changed files, filtered by time range.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days to look back (default: 30)",
+                        "default": 30,
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: filter to specific path/directory",
+                    },
+                },
+                "required": ["owner", "repo"],
+            },
+        ),
+        # Explanation & Onboarding tools - Phase D
+        Tool(
+            name="explain_file",
+            description="Get a comprehensive overview of a file: what it does, key symbols, recent changes, top contributors, and why it exists. Great for onboarding.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to repo root",
+                    },
+                    "include_content": {
+                        "type": "boolean",
+                        "description": "Include file content preview (default: false)",
+                        "default": False,
+                    },
+                },
+                "required": ["owner", "repo", "path"],
+            },
+        ),
+        Tool(
+            name="list_github_tree",
+            description="Get the complete file tree of a GitHub repository in one fast API call. Essential for understanding codebase structure. Can filter by path prefix and file extension.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path_prefix": {
+                        "type": "string",
+                        "description": "Filter to paths starting with this prefix (e.g., 'src/', 'tests/')",
+                    },
+                    "extension": {
+                        "type": "string",
+                        "description": "Filter to files with this extension (e.g., '.py', '.ts')",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum directory depth to include (default: unlimited)",
+                    },
+                },
+                "required": ["owner", "repo"],
+            },
+        ),
+        Tool(
+            name="explain_directory",
+            description="Get an overview of a directory: structure, file types, key files, recent activity, and purpose. Useful for understanding codebase layout.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to repo root (use '' or '.' for root)",
+                        "default": "",
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "How deep to explore subdirectories (default: 2)",
+                        "default": 2,
+                    },
+                },
+                "required": ["owner", "repo"],
+            },
+        ),
+        Tool(
+            name="get_recent_activity",
+            description="Get recent commit activity for a file or directory. Shows what changed recently, who made changes, and links to PRs.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory path (optional, defaults to entire repo)",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days to look back (default: 14)",
+                        "default": 14,
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to return (default: 20)",
+                        "default": 20,
+                    },
+                },
+                "required": ["owner", "repo"],
+            },
+        ),
     ]
 
 
@@ -585,6 +822,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["repo"],
                 arguments["path"],
                 arguments.get("ref"),
+                arguments.get("max_size", 50000),
             )
         elif name == "get_pr":
             result = await _get_pr(arguments["owner"], arguments["repo"], arguments["pr_number"])
@@ -635,6 +873,67 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["path"],
                 arguments["symbol_name"],
                 min(arguments.get("max_commits", 20), 50),  # Cap at 50 to limit API calls
+            )
+        # Analysis tools
+        elif name == "get_code_context":
+            result = await _get_code_context(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["path"],
+                arguments.get("max_commits", 10),
+            )
+        elif name == "get_code_owners":
+            result = await _get_code_owners(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["path"],
+                arguments.get("max_commits", 100),
+            )
+        elif name == "get_change_coupling":
+            result = await _get_change_coupling(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["path"],
+                arguments.get("max_commits", 50),
+                arguments.get("min_coupling", 0.3),
+            )
+        elif name == "get_activity_summary":
+            result = await _get_activity_summary(
+                arguments["owner"],
+                arguments["repo"],
+                arguments.get("days", 30),
+                arguments.get("path"),
+            )
+        # Explanation & Onboarding tools
+        elif name == "explain_file":
+            result = await _explain_file(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["path"],
+                arguments.get("include_content", False),
+            )
+        elif name == "list_github_tree":
+            result = await _list_github_tree(
+                arguments["owner"],
+                arguments["repo"],
+                arguments.get("path_prefix"),
+                arguments.get("extension"),
+                arguments.get("max_depth"),
+            )
+        elif name == "explain_directory":
+            result = await _explain_directory(
+                arguments["owner"],
+                arguments["repo"],
+                arguments.get("path", ""),
+                arguments.get("depth", 2),
+            )
+        elif name == "get_recent_activity":
+            result = await _get_recent_activity(
+                arguments["owner"],
+                arguments["repo"],
+                arguments.get("path"),
+                arguments.get("days", 14),
+                arguments.get("max_commits", 20),
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
@@ -1043,17 +1342,22 @@ async def _get_github_file_history(
     }
 
 
-async def _get_github_file(owner: str, repo: str, path: str, ref: str | None) -> dict[str, Any]:
-    """Get file contents via GitHub API (with size limit for token efficiency)."""
+async def _get_github_file(
+    owner: str, repo: str, path: str, ref: str | None, max_size: int = 50000
+) -> dict[str, Any]:
+    """Get file contents via GitHub API (with configurable size limit for token efficiency)."""
     client = GitHubClient(owner=owner, repo=repo)
     file_data = await client.get_file_contents(path, ref=ref)
 
     # Truncate large files to prevent token explosion
-    MAX_CONTENT_SIZE = 10000  # ~10KB
+    # max_size=0 means no limit, otherwise truncate at max_size
     content = file_data.get("content", "")
     is_truncated = False
-    if len(content) > MAX_CONTENT_SIZE:
-        content = content[:MAX_CONTENT_SIZE] + "\n... [truncated - file too large]"
+    if max_size > 0 and len(content) > max_size:
+        content = (
+            content[:max_size]
+            + f"\n... [truncated at {max_size} bytes - use max_size=0 for full content]"
+        )
         is_truncated = True
 
     result = {
@@ -1637,6 +1941,654 @@ async def _trace_github_symbol_history(
         "last_modified_commit": last_modified,
         "current_state": current_state,
         "changes": changes,
+    }
+
+
+# Analysis tool implementations
+async def _get_code_context(owner: str, repo: str, path: str, max_commits: int) -> dict[str, Any]:
+    """Get full decision chain: commits → PRs → issues for a file."""
+    client = GitHubClient(owner=owner, repo=repo)
+
+    # Get recent commits for this file
+    commits = await client.list_commits(path=path, per_page=max_commits)
+
+    if not commits:
+        return {
+            "success": False,
+            "error": f"No commits found for file: {path}",
+        }
+
+    # Build context chain
+    context_chain: list[dict[str, Any]] = []
+    prs_seen: set[int] = set()
+    issues_seen: set[int] = set()
+
+    for commit in commits:
+        commit_context: dict[str, Any] = {
+            "commit": {
+                "sha": commit["short_sha"],
+                "message": commit["subject"],
+                "author": commit["author"]["name"],
+                "date": commit["author"]["date"],
+                "html_url": commit.get("html_url"),
+            },
+            "prs": [],
+            "issues": [],
+        }
+
+        # Find PRs for this commit
+        try:
+            pr_numbers = await client.search_prs_for_commit(commit["sha"])
+            for pr_num in pr_numbers[:3]:  # Limit to 3 PRs per commit
+                if pr_num in prs_seen:
+                    continue
+                prs_seen.add(pr_num)
+
+                try:
+                    pr = await client.get_pull_request(pr_num)
+                    pr_info = {
+                        "number": pr.number,
+                        "title": pr.title,
+                        "state": pr.state.value,
+                        "author": pr.author.login,
+                        "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                        "html_url": pr.html_url,
+                        "linked_issues": pr.linked_issues,
+                    }
+                    commit_context["prs"].append(pr_info)
+
+                    # Fetch linked issues
+                    for issue_num in pr.linked_issues:
+                        if issue_num in issues_seen:
+                            continue
+                        issues_seen.add(issue_num)
+
+                        try:
+                            issue = await client.get_issue(issue_num)
+                            issue_info = {
+                                "number": issue.number,
+                                "title": issue.title,
+                                "state": issue.state.value,
+                                "author": issue.author.login,
+                                "labels": [lbl.name for lbl in issue.labels],
+                                "html_url": issue.html_url,
+                            }
+                            commit_context["issues"].append(issue_info)
+                        except GitHubClientError:
+                            pass
+
+                except GitHubClientError:
+                    pass
+
+        except GitHubClientError:
+            pass
+
+        context_chain.append(commit_context)
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "total_commits": len(commits),
+        "total_prs_found": len(prs_seen),
+        "total_issues_found": len(issues_seen),
+        "context_chain": context_chain,
+    }
+
+
+async def _get_code_owners(owner: str, repo: str, path: str, max_commits: int) -> dict[str, Any]:
+    """Find who knows this code best by analyzing commit history."""
+    client = GitHubClient(owner=owner, repo=repo)
+
+    # Get commits for this path
+    commits = await client.list_commits(path=path, per_page=max_commits)
+
+    if not commits:
+        return {
+            "success": False,
+            "error": f"No commits found for path: {path}",
+        }
+
+    # Aggregate by author
+    author_stats: dict[str, dict[str, Any]] = {}
+
+    for i, commit in enumerate(commits):
+        author_name = commit["author"]["name"]
+        author_email = commit["author"]["email"]
+        key = f"{author_name} <{author_email}>"
+
+        if key not in author_stats:
+            author_stats[key] = {
+                "name": author_name,
+                "email": author_email,
+                "commits": 0,
+                "first_commit_date": commit["author"]["date"],
+                "last_commit_date": commit["author"]["date"],
+                "recency_rank": i + 1,  # Lower is more recent
+            }
+
+        author_stats[key]["commits"] += 1
+        # Track date range
+        if commit["author"]["date"]:
+            author_stats[key]["last_commit_date"] = commit["author"]["date"]
+
+    # Calculate ownership score
+    total_commits = len(commits)
+    owners = []
+
+    for _key, stats in author_stats.items():
+        # Score based on: commits (50%), recency (50%)
+        commit_score = stats["commits"] / total_commits
+        recency_score = 1 - (stats["recency_rank"] / total_commits)
+        ownership_score = (commit_score * 0.5) + (recency_score * 0.5)
+
+        owners.append(
+            {
+                "name": stats["name"],
+                "email": stats["email"],
+                "commits": stats["commits"],
+                "commit_percentage": round(commit_score * 100, 1),
+                "last_commit_date": stats["last_commit_date"],
+                "ownership_score": round(ownership_score, 3),
+            }
+        )
+
+    # Sort by ownership score
+    owners.sort(key=lambda x: x["ownership_score"], reverse=True)
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "total_commits_analyzed": total_commits,
+        "unique_contributors": len(owners),
+        "owners": owners[:10],  # Top 10
+    }
+
+
+async def _get_change_coupling(
+    owner: str, repo: str, path: str, max_commits: int, min_coupling: float
+) -> dict[str, Any]:
+    """Find files that frequently change together with the target file."""
+    client = GitHubClient(owner=owner, repo=repo)
+
+    # Get commits that touched this file
+    commits = await client.list_commits(path=path, per_page=max_commits)
+
+    if not commits:
+        return {
+            "success": False,
+            "error": f"No commits found for file: {path}",
+        }
+
+    # For each commit, get full commit details to see other files changed
+    co_changes: dict[str, int] = {}
+    total_commits_analyzed = 0
+
+    for commit in commits[:30]:  # Limit to 30 to reduce API calls
+        try:
+            full_commit = await client.get_commit(commit["sha"])
+            files = full_commit.get("files", [])
+
+            # Count co-changes
+            for f in files:
+                file_path = f.get("path", "")
+                if file_path and file_path != path:
+                    co_changes[file_path] = co_changes.get(file_path, 0) + 1
+
+            total_commits_analyzed += 1
+
+        except GitHubClientError:
+            continue
+
+    if total_commits_analyzed == 0:
+        return {
+            "success": False,
+            "error": "Could not analyze any commits",
+        }
+
+    # Calculate coupling ratio and filter
+    coupled_files = []
+    for file_path, count in co_changes.items():
+        coupling_ratio = count / total_commits_analyzed
+        if coupling_ratio >= min_coupling:
+            coupled_files.append(
+                {
+                    "path": file_path,
+                    "co_change_count": count,
+                    "coupling_ratio": round(coupling_ratio, 3),
+                }
+            )
+
+    # Sort by coupling ratio
+    coupled_files.sort(key=lambda x: x["coupling_ratio"], reverse=True)
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "total_commits_analyzed": total_commits_analyzed,
+        "min_coupling_threshold": min_coupling,
+        "coupled_files_count": len(coupled_files),
+        "coupled_files": coupled_files[:20],  # Top 20
+        "interpretation": (
+            f"Files with coupling ratio >= {min_coupling} change together with {path} "
+            f"at least {int(min_coupling * 100)}% of the time."
+        ),
+    }
+
+
+async def _get_activity_summary(
+    owner: str, repo: str, days: int, path: str | None
+) -> dict[str, Any]:
+    """Get aggregated summary of repository activity."""
+    from datetime import datetime, timedelta
+
+    client = GitHubClient(owner=owner, repo=repo)
+
+    # Calculate date threshold
+    since_date = datetime.now() - timedelta(days=days)
+    date_str = since_date.strftime("%Y-%m-%d")
+
+    # Search for commits in date range
+    query = f"committer-date:>{date_str}"
+    if path:
+        # Note: GitHub commit search doesn't support path filter, use list_commits instead
+        commits = await client.list_commits(path=path, per_page=100)
+        # Filter by date manually
+        commits = [c for c in commits if c["author"]["date"] and c["author"]["date"] >= date_str]
+    else:
+        result = await client.search_commits(query, per_page=100)
+        commits = result.get("items", [])
+
+    if not commits:
+        return {
+            "success": True,
+            "owner": owner,
+            "repo": repo,
+            "days": days,
+            "path": path,
+            "total_commits": 0,
+            "message": f"No commits found in the last {days} days",
+        }
+
+    # Analyze commits
+    by_type: dict[str, int] = {
+        "bugfix": 0,
+        "feature": 0,
+        "refactor": 0,
+        "docs": 0,
+        "test": 0,
+        "chore": 0,
+        "other": 0,
+    }
+    by_author: dict[str, int] = {}
+
+    type_keywords = {
+        "bugfix": ["fix", "bug", "issue", "error", "crash", "patch"],
+        "feature": ["add", "feat", "implement", "new", "introduce"],
+        "refactor": ["refactor", "clean", "reorganize", "simplify"],
+        "docs": ["doc", "readme", "comment", "typo"],
+        "test": ["test", "spec", "coverage"],
+        "chore": ["chore", "deps", "dependency", "upgrade", "bump", "ci", "build"],
+    }
+
+    for commit in commits:
+        # Categorize by type
+        msg_lower = commit.get("subject", "").lower()
+        commit_type = "other"
+        for type_name, keywords in type_keywords.items():
+            if any(kw in msg_lower for kw in keywords):
+                commit_type = type_name
+                break
+        by_type[commit_type] += 1
+
+        # Count by author
+        author = commit["author"]["name"]
+        by_author[author] = by_author.get(author, 0) + 1
+
+    # Sort authors by commit count
+    top_authors = sorted(by_author.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "days": days,
+        "path": path,
+        "total_commits": len(commits),
+        "commits_by_type": by_type,
+        "top_contributors": [{"name": name, "commits": count} for name, count in top_authors],
+        "summary": (
+            f"In the last {days} days: {len(commits)} commits by {len(by_author)} contributors. "
+            f"Bugfixes: {by_type['bugfix']}, Features: {by_type['feature']}, "
+            f"Refactors: {by_type['refactor']}, Other: {by_type['other']}"
+        ),
+    }
+
+
+# Explanation & Onboarding tool implementations
+async def _explain_file(owner: str, repo: str, path: str, include_content: bool) -> dict[str, Any]:
+    """Get comprehensive overview of a file."""
+    client = GitHubClient(owner=owner, repo=repo)
+    parser = CodeParser()
+
+    # Get file content
+    try:
+        file_data = await client.get_file_contents(path)
+    except GitHubClientError as e:
+        return {"success": False, "error": f"Could not fetch file: {e}"}
+
+    if file_data.get("type") != "file":
+        return {"success": False, "error": f"Path is not a file: {path}"}
+
+    content = file_data.get("content", "")
+    file_size = file_data.get("size", 0)
+
+    # Extract symbols if supported language
+    symbols_info = None
+    language = parser.detect_language(path)
+    if language and content:
+        try:
+            symbols = parser.extract_symbols(content, language)
+            symbols_info = {
+                "language": language,
+                "classes": [
+                    {"name": s.qualified_name, "line": s.start_line}
+                    for s in symbols
+                    if s.type.value == "class"
+                ],
+                "functions": [
+                    {"name": s.qualified_name, "line": s.start_line, "signature": s.signature}
+                    for s in symbols
+                    if s.type.value in ("function", "method")
+                ][
+                    :20
+                ],  # Limit to 20
+                "total_symbols": len(symbols),
+            }
+        except ParserError:
+            pass
+
+    # Get commit history
+    commits = await client.list_commits(path=path, per_page=10)
+
+    # Get top contributors
+    author_counts: dict[str, int] = {}
+    for commit in commits:
+        author = commit["author"]["name"]
+        author_counts[author] = author_counts.get(author, 0) + 1
+    top_contributors = sorted(author_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Recent changes
+    recent_changes = []
+    for commit in commits[:5]:
+        recent_changes.append(
+            {
+                "sha": commit["short_sha"],
+                "message": commit["subject"],
+                "author": commit["author"]["name"],
+                "date": commit["author"]["date"],
+            }
+        )
+
+    # Build response
+    result: dict[str, Any] = {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "file_info": {
+            "size_bytes": file_size,
+            "html_url": file_data.get("html_url"),
+        },
+        "symbols": symbols_info,
+        "history": {
+            "total_commits": len(commits),
+            "top_contributors": [
+                {"name": name, "commits": count} for name, count in top_contributors
+            ],
+            "recent_changes": recent_changes,
+        },
+    }
+
+    if include_content:
+        # Truncate content if too large
+        max_preview = 3000
+        if len(content) > max_preview:
+            result["content_preview"] = content[:max_preview] + "\n... (truncated)"
+        else:
+            result["content_preview"] = content
+
+    return result
+
+
+async def _list_github_tree(
+    owner: str,
+    repo: str,
+    path_prefix: str | None,
+    extension: str | None,
+    max_depth: int | None,
+) -> dict[str, Any]:
+    """Get complete file tree of a repository."""
+    client = GitHubClient(owner=owner, repo=repo)
+
+    try:
+        tree_data = await client.get_tree()
+    except GitHubClientError as e:
+        return {"success": False, "error": f"Could not fetch tree: {e}"}
+
+    entries = tree_data.get("entries", [])
+
+    # Apply filters
+    filtered_entries = []
+    for entry in entries:
+        path = entry["path"]
+
+        # Filter by path prefix
+        if path_prefix and not path.startswith(path_prefix):
+            continue
+
+        # Filter by extension
+        if extension:
+            if entry["type"] == "file" and not path.endswith(extension):
+                continue
+
+        # Filter by depth
+        if max_depth is not None:
+            depth = path.count("/")
+            if depth > max_depth:
+                continue
+
+        filtered_entries.append(entry)
+
+    # Organize into tree structure for readability
+    dirs = [e for e in filtered_entries if e["type"] == "dir"]
+    files = [e for e in filtered_entries if e["type"] == "file"]
+
+    # Get file type statistics
+    file_types: dict[str, int] = {}
+    for f in files:
+        ext = "." + f["path"].split(".")[-1] if "." in f["path"] else "(no ext)"
+        file_types[ext] = file_types.get(ext, 0) + 1
+
+    # Sort for consistent output
+    dirs.sort(key=lambda x: x["path"])
+    files.sort(key=lambda x: x["path"])
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "filters": {
+            "path_prefix": path_prefix,
+            "extension": extension,
+            "max_depth": max_depth,
+        },
+        "truncated": tree_data.get("truncated", False),
+        "total_entries": len(filtered_entries),
+        "total_dirs": len(dirs),
+        "total_files": len(files),
+        "file_types": dict(sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:15]),
+        "directories": [d["path"] for d in dirs[:50]],
+        "files": [{"path": f["path"], "size": f.get("size")} for f in files[:100]],
+    }
+
+
+async def _explain_directory(owner: str, repo: str, path: str, _depth: int) -> dict[str, Any]:
+    """Get overview of a directory structure."""
+    client = GitHubClient(owner=owner, repo=repo)
+
+    # Normalize path
+    if path in (".", ""):
+        path = ""
+
+    # Get directory contents using get_file_contents (works for dirs too)
+    try:
+        # For root, use empty string or "."
+        dir_data = await client.get_file_contents(path if path else ".")
+    except GitHubClientError as e:
+        return {"success": False, "error": f"Could not fetch directory: {e}"}
+
+    # Check if it's a directory
+    if dir_data.get("type") != "directory":
+        return {"success": False, "error": f"Path is not a directory: {path}"}
+
+    contents = dir_data.get("entries", [])
+
+    # Categorize contents
+    dirs: list[dict[str, Any]] = []
+    files: list[dict[str, Any]] = []
+    file_types: dict[str, int] = {}
+
+    for item in contents:
+        if item["type"] == "dir":
+            dirs.append(
+                {
+                    "name": item["name"],
+                    "path": item["path"],
+                }
+            )
+        else:
+            files.append(
+                {
+                    "name": item["name"],
+                    "path": item["path"],
+                    "size": item.get("size", 0),
+                }
+            )
+            # Count file types
+            ext = "." + item["name"].split(".")[-1] if "." in item["name"] else "(no ext)"
+            file_types[ext] = file_types.get(ext, 0) + 1
+
+    # Sort files by size to find key files
+    files.sort(key=lambda x: x.get("size", 0), reverse=True)
+
+    # Get recent commits for this path
+    commits = await client.list_commits(path=path if path else None, per_page=10)
+
+    # Analyze activity
+    author_counts: dict[str, int] = {}
+    for commit in commits:
+        author = commit["author"]["name"]
+        author_counts[author] = author_counts.get(author, 0) + 1
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path or "(root)",
+        "structure": {
+            "total_dirs": len(dirs),
+            "total_files": len(files),
+            "directories": dirs[:20],  # Limit
+            "files": files[:30],  # Limit
+            "file_types": dict(sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:10]),
+        },
+        "activity": {
+            "recent_commits": len(commits),
+            "contributors": [
+                {"name": name, "commits": count}
+                for name, count in sorted(author_counts.items(), key=lambda x: x[1], reverse=True)[
+                    :5
+                ]
+            ],
+        },
+        "key_files": [f["name"] for f in files[:5]],  # Largest files are often important
+    }
+
+
+async def _get_recent_activity(
+    owner: str, repo: str, path: str | None, days: int, max_commits: int
+) -> dict[str, Any]:
+    """Get recent commit activity for a path."""
+    from datetime import datetime, timedelta
+
+    client = GitHubClient(owner=owner, repo=repo)
+
+    # Calculate date threshold
+    since_date = datetime.now() - timedelta(days=days)
+    date_str = since_date.strftime("%Y-%m-%d")
+
+    # Get commits
+    commits = await client.list_commits(path=path, per_page=max_commits)
+
+    # Filter by date
+    recent_commits = [c for c in commits if c["author"]["date"] and c["author"]["date"] >= date_str]
+
+    if not recent_commits:
+        return {
+            "success": True,
+            "owner": owner,
+            "repo": repo,
+            "path": path,
+            "days": days,
+            "total_commits": 0,
+            "message": f"No commits in the last {days} days",
+        }
+
+    # Build activity list with PR links
+    activities: list[dict[str, Any]] = []
+    for commit in recent_commits:
+        activity: dict[str, Any] = {
+            "sha": commit["short_sha"],
+            "message": commit["subject"],
+            "author": commit["author"]["name"],
+            "date": commit["author"]["date"],
+            "html_url": commit.get("html_url"),
+        }
+
+        # Try to find associated PR
+        try:
+            pr_numbers = await client.search_prs_for_commit(commit["sha"])
+            if pr_numbers:
+                activity["pr_number"] = pr_numbers[0]
+        except GitHubClientError:
+            pass
+
+        activities.append(activity)
+
+    # Aggregate by author
+    by_author: dict[str, int] = {}
+    for commit in recent_commits:
+        author = commit["author"]["name"]
+        by_author[author] = by_author.get(author, 0) + 1
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "days": days,
+        "total_commits": len(recent_commits),
+        "activities": activities,
+        "by_author": [
+            {"name": name, "commits": count}
+            for name, count in sorted(by_author.items(), key=lambda x: x[1], reverse=True)
+        ],
     }
 
 
