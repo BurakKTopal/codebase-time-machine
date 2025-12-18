@@ -522,6 +522,135 @@ class GitHubClient:
             for b in data
         ]
 
+    async def search_code(
+        self,
+        query: str,
+        per_page: int = 30,
+        page: int = 1,
+    ) -> dict:
+        """Search for code in the repository.
+
+        Args:
+            query: Search query (supports GitHub code search syntax).
+            per_page: Number of results per page (max 100).
+            page: Page number.
+
+        Returns:
+            Search results with code matches.
+        """
+        # Scope to this repository
+        full_query = f"repo:{self.owner}/{self.repo} {query}"
+
+        data = await self._request(
+            "GET",
+            "/search/code",
+            params={
+                "q": full_query,
+                "per_page": min(per_page, 100),
+                "page": page,
+            },
+        )
+
+        results = []
+        for item in data.get("items", []):
+            results.append(
+                {
+                    "name": item.get("name", ""),
+                    "path": item.get("path", ""),
+                    "sha": item.get("sha", ""),
+                    "html_url": item.get("html_url"),
+                    "repository": item.get("repository", {}).get("full_name", ""),
+                    # Note: GitHub doesn't return file contents in search results
+                    # Use get_file_contents to fetch actual content
+                }
+            )
+
+        return {
+            "total_count": data.get("total_count", 0),
+            "incomplete_results": data.get("incomplete_results", False),
+            "items": results,
+        }
+
+    async def search_commits(
+        self,
+        query: str,
+        per_page: int = 30,
+        page: int = 1,
+    ) -> dict:
+        """Search for commits in the repository.
+
+        Args:
+            query: Search query (supports GitHub commit search syntax).
+            per_page: Number of results per page (max 100).
+            page: Page number.
+
+        Returns:
+            Search results with commit matches.
+        """
+        # Scope to this repository
+        full_query = f"repo:{self.owner}/{self.repo} {query}"
+
+        # Commit search requires a special accept header
+        async with self._get_client() as client:
+            headers = dict(self._headers)
+            headers["Accept"] = "application/vnd.github.cloak-preview+json"
+
+            response = await client.request(
+                "GET",
+                "/search/commits",
+                params={
+                    "q": full_query,
+                    "per_page": min(per_page, 100),
+                    "page": page,
+                },
+                headers=headers,
+            )
+
+            if response.status_code == 404:
+                raise GitHubNotFoundError("Commit search not found")
+            if response.status_code == 403:
+                remaining = response.headers.get("X-RateLimit-Remaining")
+                if remaining == "0":
+                    reset_time = response.headers.get("X-RateLimit-Reset")
+                    raise GitHubRateLimitError(f"Rate limit exceeded. Resets at {reset_time}")
+                raise GitHubClientError(f"Forbidden: {response.text}")
+            if response.status_code >= 400:
+                raise GitHubClientError(f"API error {response.status_code}: {response.text}")
+
+            data = response.json()
+
+        results = []
+        for item in data.get("items", []):
+            commit_data = item.get("commit", {})
+            author_data = commit_data.get("author", {})
+            committer_data = commit_data.get("committer", {})
+
+            results.append(
+                {
+                    "sha": item.get("sha", ""),
+                    "short_sha": item.get("sha", "")[:7],
+                    "message": commit_data.get("message", ""),
+                    "subject": commit_data.get("message", "").split("\n")[0],
+                    "author": {
+                        "name": author_data.get("name", "Unknown"),
+                        "email": author_data.get("email", ""),
+                        "date": author_data.get("date"),
+                    },
+                    "committer": {
+                        "name": committer_data.get("name", "Unknown"),
+                        "email": committer_data.get("email", ""),
+                        "date": committer_data.get("date"),
+                    },
+                    "html_url": item.get("html_url"),
+                }
+            )
+
+        return {
+            "total_count": data.get("total_count", 0),
+            "incomplete_results": data.get("incomplete_results", False),
+            "items": results,
+        }
+
     @classmethod
     def from_remote_url(cls, remote_url: str, token: str | None = None) -> "GitHubClient":
         """Create client from git remote URL.

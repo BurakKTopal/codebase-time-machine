@@ -366,6 +366,61 @@ async def list_tools() -> list[Tool]:
                 "required": ["owner", "repo", "sha"],
             },
         ),
+        # Search tools
+        Tool(
+            name="search_github_code",
+            description="Search for code in any GitHub repository. Supports GitHub code search syntax (e.g., 'function language:python', 'import requests extension:py').",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (supports GitHub code search syntax: language:, extension:, path:, filename:)",
+                    },
+                    "per_page": {
+                        "type": "integer",
+                        "description": "Results per page (max 100, default 30)",
+                        "default": 30,
+                    },
+                },
+                "required": ["owner", "repo", "query"],
+            },
+        ),
+        Tool(
+            name="search_github_commits",
+            description="Search for commits in any GitHub repository. Supports GitHub commit search syntax (e.g., 'fix bug', 'author:username', 'committer-date:>2023-01-01').",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (supports: author:, committer:, committer-date:, author-date:, merge:, hash:)",
+                    },
+                    "per_page": {
+                        "type": "integer",
+                        "description": "Results per page (max 100, default 30)",
+                        "default": 30,
+                    },
+                },
+                "required": ["owner", "repo", "query"],
+            },
+        ),
         # Symbol tracking tools
         Tool(
             name="get_file_symbols",
@@ -409,7 +464,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trace_symbol_history",
-            description="Track the history of a specific symbol (function/class/method) across commits. Shows when it was added, modified, or renamed.",
+            description="Track the history of a specific symbol (function/class/method) across commits in a LOCAL repository. Shows when it was added, modified, or renamed.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -432,6 +487,37 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["repo_path", "file_path", "symbol_name"],
+            },
+        ),
+        Tool(
+            name="trace_github_symbol_history",
+            description="Track the history of a specific symbol (function/class/method) across commits in any GitHub repository WITHOUT cloning. Shows when it was added, modified, or deleted with commit details.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to repo root (must be a Python file)",
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the symbol to track (e.g., 'my_function' or 'MyClass.my_method')",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to analyze (default: 20, max: 50 to limit API calls)",
+                        "default": 20,
+                    },
+                },
+                "required": ["owner", "repo", "path", "symbol_name"],
             },
         ),
     ]
@@ -510,6 +596,21 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await _search_prs_for_commit(
                 arguments["owner"], arguments["repo"], arguments["sha"]
             )
+        # Search tools
+        elif name == "search_github_code":
+            result = await _search_github_code(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["query"],
+                arguments.get("per_page", 30),
+            )
+        elif name == "search_github_commits":
+            result = await _search_github_commits(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["query"],
+                arguments.get("per_page", 30),
+            )
         # Symbol tracking tools
         elif name == "get_file_symbols":
             result = await _get_file_symbols(arguments["file_path"])
@@ -526,6 +627,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["file_path"],
                 arguments["symbol_name"],
                 arguments.get("max_commits", 30),
+            )
+        elif name == "trace_github_symbol_history":
+            result = await _trace_github_symbol_history(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["path"],
+                arguments["symbol_name"],
+                min(arguments.get("max_commits", 20), 50),  # Cap at 50 to limit API calls
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
@@ -1096,6 +1205,43 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
     }
 
 
+# Search tool implementations
+async def _search_github_code(owner: str, repo: str, query: str, per_page: int) -> dict[str, Any]:
+    """Search for code in a GitHub repository."""
+    client = GitHubClient(owner=owner, repo=repo)
+    results = await client.search_code(query, per_page=per_page)
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "query": query,
+        "total_count": results["total_count"],
+        "incomplete_results": results["incomplete_results"],
+        "items": results["items"],
+        "hint": "Use get_github_file to fetch the actual content of matching files.",
+    }
+
+
+async def _search_github_commits(
+    owner: str, repo: str, query: str, per_page: int
+) -> dict[str, Any]:
+    """Search for commits in a GitHub repository."""
+    client = GitHubClient(owner=owner, repo=repo)
+    results = await client.search_commits(query, per_page=per_page)
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "query": query,
+        "total_count": results["total_count"],
+        "incomplete_results": results["incomplete_results"],
+        "items": results["items"],
+        "hint": "Use get_github_commit for full details of a specific commit.",
+    }
+
+
 # Symbol tracking tool implementations
 async def _get_file_symbols(file_path: str) -> dict[str, Any]:
     """Extract symbols from a local file."""
@@ -1332,6 +1478,161 @@ async def _trace_symbol_history(
         "file_path": file_path,
         "total_commits_analyzed": len(commits),
         "total_changes": len(changes),
+        "first_seen_commit": first_seen,
+        "last_modified_commit": last_modified,
+        "current_state": current_state,
+        "changes": changes,
+    }
+
+
+async def _trace_github_symbol_history(
+    owner: str, repo: str, path: str, symbol_name: str, max_commits: int
+) -> dict[str, Any]:
+    """Track a symbol's history across commits via GitHub API."""
+    client = GitHubClient(owner=owner, repo=repo)
+    parser = CodeParser()
+
+    # Check language support
+    language = parser.detect_language(path)
+    if not language:
+        return {
+            "success": False,
+            "error": f"Unsupported file type for symbol extraction: {path}",
+        }
+
+    # Get file history
+    commits = await client.list_commits(path=path, per_page=max_commits)
+
+    if not commits:
+        return {
+            "success": False,
+            "error": f"No commits found for file: {path}",
+        }
+
+    # Track symbol across commits (oldest to newest)
+    changes: list[dict[str, Any]] = []
+    prev_symbol = None
+    first_seen = None
+    last_modified = None
+    parse_errors = 0
+
+    for commit in reversed(commits):
+        try:
+            # Fetch file content at this commit
+            file_data = await client.get_file_contents(path, ref=commit["sha"])
+
+            if file_data.get("type") != "file":
+                continue
+
+            content = file_data.get("content", "")
+            if not content:
+                continue
+
+            # Extract symbols
+            symbols = parser.extract_symbols(content, language)
+
+            # Find target symbol
+            current_symbol = None
+            for s in symbols:
+                if s.name == symbol_name or s.qualified_name == symbol_name:
+                    current_symbol = s
+                    break
+
+            # Determine what changed
+            short_sha = commit["sha"][:7]
+            commit_date = commit["author"]["date"]
+            author_name = commit["author"]["name"]
+            subject = commit["subject"]
+
+            if current_symbol and not prev_symbol:
+                # Symbol was added
+                changes.append(
+                    {
+                        "sha": short_sha,
+                        "date": commit_date,
+                        "author": author_name,
+                        "message": subject,
+                        "change_type": "added",
+                        "start_line": current_symbol.start_line,
+                        "end_line": current_symbol.end_line,
+                        "line_count": current_symbol.line_count,
+                        "html_url": commit.get("html_url"),
+                    }
+                )
+                first_seen = short_sha
+                last_modified = short_sha
+
+            elif current_symbol and prev_symbol:
+                # Check if modified
+                is_modified = (
+                    current_symbol.start_line != prev_symbol.start_line
+                    or current_symbol.end_line != prev_symbol.end_line
+                    or current_symbol.signature != prev_symbol.signature
+                )
+                if is_modified:
+                    changes.append(
+                        {
+                            "sha": short_sha,
+                            "date": commit_date,
+                            "author": author_name,
+                            "message": subject,
+                            "change_type": "modified",
+                            "old_start_line": prev_symbol.start_line,
+                            "old_end_line": prev_symbol.end_line,
+                            "new_start_line": current_symbol.start_line,
+                            "new_end_line": current_symbol.end_line,
+                            "lines_changed": abs(
+                                current_symbol.line_count - prev_symbol.line_count
+                            ),
+                            "html_url": commit.get("html_url"),
+                        }
+                    )
+                    last_modified = short_sha
+
+            elif not current_symbol and prev_symbol:
+                # Symbol was deleted
+                changes.append(
+                    {
+                        "sha": short_sha,
+                        "date": commit_date,
+                        "author": author_name,
+                        "message": subject,
+                        "change_type": "deleted",
+                        "last_start_line": prev_symbol.start_line,
+                        "last_end_line": prev_symbol.end_line,
+                        "html_url": commit.get("html_url"),
+                    }
+                )
+
+            prev_symbol = current_symbol
+
+        except (GitHubClientError, ParserError):
+            parse_errors += 1
+            continue
+
+    # Current state
+    current_state = None
+    if prev_symbol:
+        current_state = {
+            "exists": True,
+            "start_line": prev_symbol.start_line,
+            "end_line": prev_symbol.end_line,
+            "line_count": prev_symbol.line_count,
+            "signature": prev_symbol.signature,
+            "type": prev_symbol.type.value,
+        }
+    else:
+        current_state = {"exists": False}
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "symbol_name": symbol_name,
+        "total_commits_analyzed": len(commits),
+        "total_changes": len(changes),
+        "parse_errors": parse_errors,
         "first_seen_commit": first_seen,
         "last_modified_commit": last_modified,
         "current_state": current_state,

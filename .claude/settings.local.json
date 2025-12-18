@@ -15,7 +15,8 @@
       "Bash(head:*)",
       "mcp__ctm__get_github_branches",
       "mcp__ctm__get_github_file",
-      "mcp__ctm__get_issue"
+      "mcp__ctm__get_issue",
+      "mcp__ctm__get_github_file_symbols"
     ]
   },
   "enableAllProjectMcpServers": true,
