@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync:*)",
+      "Bash(uv run python:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run black:*)",
+      "Bash(uv run pytest:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "ctm"
+  ],
+  "enableAllProjectMcpServers": true
+}
