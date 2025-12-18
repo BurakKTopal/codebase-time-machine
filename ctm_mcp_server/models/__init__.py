@@ -31,6 +31,13 @@ from ctm_mcp_server.models.result_models import (
     FileHistoryResult,
     RepoInfoResult,
 )
+from ctm_mcp_server.models.symbol_models import (
+    FileSymbols,
+    Symbol,
+    SymbolChange,
+    SymbolHistory,
+    SymbolType,
+)
 
 __all__ = [
     # Git models
@@ -56,4 +63,10 @@ __all__ = [
     "FileHistoryResult",
     "ExplainCommitResult",
     "BlameWithContextResult",
+    # Symbol models
+    "Symbol",
+    "SymbolType",
+    "SymbolChange",
+    "SymbolHistory",
+    "FileSymbols",
 ]

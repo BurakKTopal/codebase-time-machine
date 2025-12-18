@@ -16,6 +16,7 @@ from mcp.types import TextContent, Tool
 from ctm_mcp_server.data.git_repo import GitRepo, GitRepoError
 from ctm_mcp_server.data.github_client import GitHubClient, GitHubClientError
 from ctm_mcp_server.models.result_models import IntentType
+from ctm_mcp_server.parsing.parser import CodeParser, ParserError
 
 # Create the MCP server instance
 server = Server("codebase-time-machine")
@@ -365,6 +366,74 @@ async def list_tools() -> list[Tool]:
                 "required": ["owner", "repo", "sha"],
             },
         ),
+        # Symbol tracking tools
+        Tool(
+            name="get_file_symbols",
+            description="Extract code symbols (functions, classes, methods) from a local file using tree-sitter parsing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the source file",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        ),
+        Tool(
+            name="get_github_file_symbols",
+            description="Extract code symbols from a file in any GitHub repository without cloning.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to repo root (must be a Python file)",
+                    },
+                    "ref": {
+                        "type": "string",
+                        "description": "Git ref (branch, tag, or SHA). Defaults to default branch.",
+                    },
+                },
+                "required": ["owner", "repo", "path"],
+            },
+        ),
+        Tool(
+            name="trace_symbol_history",
+            description="Track the history of a specific symbol (function/class/method) across commits. Shows when it was added, modified, or renamed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the local git repository",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the file (relative to repo root)",
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the symbol to track (e.g., 'my_function' or 'MyClass.my_method')",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to analyze (default: 30)",
+                        "default": 30,
+                    },
+                },
+                "required": ["repo_path", "file_path", "symbol_name"],
+            },
+        ),
     ]
 
 
@@ -441,6 +510,23 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await _search_prs_for_commit(
                 arguments["owner"], arguments["repo"], arguments["sha"]
             )
+        # Symbol tracking tools
+        elif name == "get_file_symbols":
+            result = await _get_file_symbols(arguments["file_path"])
+        elif name == "get_github_file_symbols":
+            result = await _get_github_file_symbols(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["path"],
+                arguments.get("ref"),
+            )
+        elif name == "trace_symbol_history":
+            result = await _trace_symbol_history(
+                arguments["repo_path"],
+                arguments["file_path"],
+                arguments["symbol_name"],
+                arguments.get("max_commits", 30),
+            )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
 
@@ -451,6 +537,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
     except GitHubClientError as e:
         error_result = {"success": False, "error": f"GitHub API error: {e}"}
+        return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
+    except ParserError as e:
+        error_result = {"success": False, "error": f"Parser error: {e}"}
         return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
     except Exception as e:
         error_result = {"success": False, "error": f"Unexpected error: {e}"}
@@ -1004,6 +1093,249 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
         "sha": sha,
         "pr_numbers": pr_numbers,
         "total_found": len(pr_numbers),
+    }
+
+
+# Symbol tracking tool implementations
+async def _get_file_symbols(file_path: str) -> dict[str, Any]:
+    """Extract symbols from a local file."""
+    parser = CodeParser()
+    symbols = parser.extract_symbols_from_file(file_path)
+
+    # Group by type for better overview
+    functions = [s for s in symbols if s.type.value == "function"]
+    methods = [s for s in symbols if s.type.value == "method"]
+    classes = [s for s in symbols if s.type.value == "class"]
+
+    return {
+        "success": True,
+        "file_path": file_path,
+        "language": parser.detect_language(file_path),
+        "total_symbols": len(symbols),
+        "summary": {
+            "functions": len(functions),
+            "methods": len(methods),
+            "classes": len(classes),
+        },
+        "symbols": [
+            {
+                "name": s.name,
+                "qualified_name": s.qualified_name,
+                "type": s.type.value,
+                "start_line": s.start_line,
+                "end_line": s.end_line,
+                "line_count": s.line_count,
+                "signature": s.signature,
+                "docstring": _truncate(s.docstring, 200) if s.docstring else None,
+                "decorators": s.decorators,
+                "bases": s.bases if s.bases else None,
+            }
+            for s in symbols
+        ],
+    }
+
+
+async def _get_github_file_symbols(
+    owner: str, repo: str, path: str, ref: str | None
+) -> dict[str, Any]:
+    """Extract symbols from a GitHub file without cloning."""
+    # First fetch the file content
+    client = GitHubClient(owner=owner, repo=repo)
+    file_data = await client.get_file_contents(path, ref=ref)
+
+    if file_data.get("type") != "file":
+        return {
+            "success": False,
+            "error": f"Path is not a file: {path}",
+        }
+
+    content = file_data.get("content", "")
+    if not content:
+        return {
+            "success": False,
+            "error": "File content is empty",
+        }
+
+    # Detect language from path
+    parser = CodeParser()
+    language = parser.detect_language(path)
+
+    if not language:
+        return {
+            "success": False,
+            "error": f"Unsupported file type for symbol extraction: {path}",
+        }
+
+    # Parse and extract symbols
+    symbols = parser.extract_symbols(content, language)
+
+    # Group by type
+    functions = [s for s in symbols if s.type.value == "function"]
+    methods = [s for s in symbols if s.type.value == "method"]
+    classes = [s for s in symbols if s.type.value == "class"]
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "path": path,
+        "ref": ref,
+        "language": language,
+        "total_symbols": len(symbols),
+        "summary": {
+            "functions": len(functions),
+            "methods": len(methods),
+            "classes": len(classes),
+        },
+        "symbols": [
+            {
+                "name": s.name,
+                "qualified_name": s.qualified_name,
+                "type": s.type.value,
+                "start_line": s.start_line,
+                "end_line": s.end_line,
+                "line_count": s.line_count,
+                "signature": s.signature,
+                "docstring": _truncate(s.docstring, 200) if s.docstring else None,
+                "decorators": s.decorators,
+                "bases": s.bases if s.bases else None,
+            }
+            for s in symbols
+        ],
+    }
+
+
+async def _trace_symbol_history(
+    repo_path: str, file_path: str, symbol_name: str, max_commits: int
+) -> dict[str, Any]:
+    """Track a symbol's history across commits."""
+    repo = GitRepo(repo_path)
+    parser = CodeParser()
+
+    # Get file history
+    commits = repo.get_file_history(file_path, max_commits=max_commits)
+
+    if not commits:
+        return {
+            "success": False,
+            "error": f"No commits found for file: {file_path}",
+        }
+
+    # Track symbol across commits
+    changes: list[dict[str, Any]] = []
+    prev_symbol = None
+    first_seen = None
+    last_modified = None
+
+    # Process commits from oldest to newest
+    for commit in reversed(commits):
+        try:
+            # Get file at this commit
+            content = repo.get_file_at_commit(commit.sha, file_path)
+            language = parser.detect_language(file_path)
+
+            if not language:
+                continue
+
+            # Extract symbols
+            symbols = parser.extract_symbols(content, language)
+
+            # Find our target symbol (match by name or qualified_name)
+            current_symbol = None
+            for s in symbols:
+                if s.name == symbol_name or s.qualified_name == symbol_name:
+                    current_symbol = s
+                    break
+
+            # Determine what changed
+            if current_symbol and not prev_symbol:
+                # Symbol was added
+                changes.append(
+                    {
+                        "sha": commit.short_sha,
+                        "date": commit.committed_date.isoformat(),
+                        "author": commit.author.name,
+                        "message": commit.subject,
+                        "change_type": "added",
+                        "start_line": current_symbol.start_line,
+                        "end_line": current_symbol.end_line,
+                        "line_count": current_symbol.line_count,
+                        "pr_number": commit.pr_number,
+                    }
+                )
+                first_seen = commit.short_sha
+                last_modified = commit.short_sha
+            elif current_symbol and prev_symbol:
+                # Check if symbol was modified (line numbers or signature changed)
+                is_modified = (
+                    current_symbol.start_line != prev_symbol.start_line
+                    or current_symbol.end_line != prev_symbol.end_line
+                    or current_symbol.signature != prev_symbol.signature
+                )
+                if is_modified:
+                    changes.append(
+                        {
+                            "sha": commit.short_sha,
+                            "date": commit.committed_date.isoformat(),
+                            "author": commit.author.name,
+                            "message": commit.subject,
+                            "change_type": "modified",
+                            "old_start_line": prev_symbol.start_line,
+                            "old_end_line": prev_symbol.end_line,
+                            "new_start_line": current_symbol.start_line,
+                            "new_end_line": current_symbol.end_line,
+                            "lines_changed": abs(
+                                current_symbol.line_count - prev_symbol.line_count
+                            ),
+                            "pr_number": commit.pr_number,
+                        }
+                    )
+                    last_modified = commit.short_sha
+            elif not current_symbol and prev_symbol:
+                # Symbol was deleted
+                changes.append(
+                    {
+                        "sha": commit.short_sha,
+                        "date": commit.committed_date.isoformat(),
+                        "author": commit.author.name,
+                        "message": commit.subject,
+                        "change_type": "deleted",
+                        "last_start_line": prev_symbol.start_line,
+                        "last_end_line": prev_symbol.end_line,
+                        "pr_number": commit.pr_number,
+                    }
+                )
+
+            prev_symbol = current_symbol
+
+        except (GitRepoError, ParserError):
+            # Skip commits where we can't parse the file
+            continue
+
+    # Get current state
+    current_state = None
+    if prev_symbol:
+        current_state = {
+            "exists": True,
+            "start_line": prev_symbol.start_line,
+            "end_line": prev_symbol.end_line,
+            "line_count": prev_symbol.line_count,
+            "signature": prev_symbol.signature,
+            "type": prev_symbol.type.value,
+        }
+    else:
+        current_state = {"exists": False}
+
+    return {
+        "success": True,
+        "symbol_name": symbol_name,
+        "file_path": file_path,
+        "total_commits_analyzed": len(commits),
+        "total_changes": len(changes),
+        "first_seen_commit": first_seen,
+        "last_modified_commit": last_modified,
+        "current_state": current_state,
+        "changes": changes,
     }
 
 
