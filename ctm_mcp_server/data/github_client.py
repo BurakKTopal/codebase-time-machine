@@ -11,6 +11,8 @@ from datetime import datetime
 import httpx
 from dotenv import load_dotenv
 
+# Import cache for caching support
+from ctm_mcp_server.data.cache import Cache
 from ctm_mcp_server.models.github_models import (
     Comment,
     Issue,
@@ -50,11 +52,19 @@ class GitHubClient:
 
     BASE_URL = "https://api.github.com"
 
+    # Cache TTL constants (in seconds)
+    TTL_IMMUTABLE = 0  # Never expire (commits, git trees)
+    TTL_LONG = 7 * 24 * 3600  # 7 days (file contents, branches)
+    TTL_MEDIUM = 24 * 3600  # 24 hours (repo metadata, commit lists)
+    TTL_SHORT = 3600  # 1 hour (PRs, issues, comments)
+    TTL_VOLATILE = 30 * 60  # 30 minutes (search results)
+
     def __init__(
         self,
         token: str | None = None,
         owner: str | None = None,
         repo: str | None = None,
+        cache: Cache | None = None,
     ) -> None:
         """Initialize GitHub client.
 
@@ -63,10 +73,13 @@ class GitHubClient:
                    uses GITHUB_TOKEN environment variable.
             owner: Repository owner (username or organization).
             repo: Repository name.
+            cache: Optional Cache instance for API response caching.
+                   If None, no caching is performed.
         """
         self.token = token or os.getenv("GITHUB_TOKEN")
         self.owner = owner
         self.repo = repo
+        self.cache = cache
 
         # Build headers
         self._headers = {
@@ -75,6 +88,34 @@ class GitHubClient:
         }
         if self.token:
             self._headers["Authorization"] = f"Bearer {self.token}"
+
+    def _cache_get(self, namespace: str, *args) -> dict | None:
+        """Get value from cache if cache is enabled.
+
+        Args:
+            namespace: Cache namespace (e.g., "github:get_pull_request").
+            *args: Additional cache key components (e.g., pr_number).
+
+        Returns:
+            Cached value as dict, or None if not cached or cache disabled.
+        """
+        if not self.cache:
+            return None
+        return self.cache.get(namespace, self.owner, self.repo, *args)
+
+    def _cache_set(
+        self, namespace: str, *args, value: dict, ttl: int | None = None
+    ) -> None:
+        """Set value in cache if cache is enabled.
+
+        Args:
+            namespace: Cache namespace (e.g., "github:get_pull_request").
+            *args: Additional cache key components (e.g., pr_number).
+            value: Value to cache (must be dict for JSON serialization).
+            ttl: Time-to-live in seconds, or None for no expiration.
+        """
+        if self.cache:
+            self.cache.set(namespace, self.owner, self.repo, *args, value=value, ttl=ttl)
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get configured HTTP client."""
@@ -174,6 +215,11 @@ class GitHubClient:
         Returns:
             PullRequest object.
         """
+        # Check cache first
+        cached = self._cache_get("github:get_pull_request", pr_number)
+        if cached is not None:
+            return PullRequest(**cached)
+
         data = await self._request("GET", self._repo_path(f"/pulls/{pr_number}"))
 
         # Determine state
@@ -196,7 +242,7 @@ class GitHubClient:
         # Extract linked issues from body
         linked_issues = self._extract_linked_issues(data.get("body") or "")
 
-        return PullRequest(
+        pr = PullRequest(
             number=data.get("number", pr_number),
             title=data.get("title", ""),
             body=data.get("body"),
@@ -227,13 +273,40 @@ class GitHubClient:
             linked_issues=linked_issues,
         )
 
+        # Cache before returning
+        self._cache_set(
+            "github:get_pull_request", pr_number, value=pr.model_dump(), ttl=self.TTL_SHORT
+        )
+
+        return pr
+
     async def get_pr_comments(self, pr_number: int) -> list[Comment]:
         """Get comments on a PR (issue comments, not review comments)."""
+        # Check cache first
+        cached = self._cache_get("github:get_pr_comments", pr_number)
+        if cached is not None:
+            return [Comment(**c) for c in cached]
+
         data = await self._request("GET", self._repo_path(f"/issues/{pr_number}/comments"))
-        return [self._parse_comment(c) for c in data]
+        comments = [self._parse_comment(c) for c in data]
+
+        # Cache before returning
+        self._cache_set(
+            "github:get_pr_comments",
+            pr_number,
+            value=[c.model_dump() for c in comments],
+            ttl=self.TTL_SHORT,
+        )
+
+        return comments
 
     async def get_pr_reviews(self, pr_number: int) -> list[Review]:
         """Get reviews on a PR."""
+        # Check cache first
+        cached = self._cache_get("github:get_pr_reviews", pr_number)
+        if cached is not None:
+            return [Review(**r) for r in cached]
+
         data = await self._request("GET", self._repo_path(f"/pulls/{pr_number}/reviews"))
         reviews = []
         for r in data:
@@ -251,12 +324,36 @@ class GitHubClient:
                     submitted_at=self._parse_datetime(r.get("submitted_at")),
                 )
             )
+
+        # Cache before returning
+        self._cache_set(
+            "github:get_pr_reviews",
+            pr_number,
+            value=[r.model_dump() for r in reviews],
+            ttl=self.TTL_SHORT,
+        )
+
         return reviews
 
     async def get_pr_review_comments(self, pr_number: int) -> list[Comment]:
         """Get review comments (inline code comments) on a PR."""
+        # Check cache first
+        cached = self._cache_get("github:get_pr_review_comments", pr_number)
+        if cached is not None:
+            return [Comment(**c) for c in cached]
+
         data = await self._request("GET", self._repo_path(f"/pulls/{pr_number}/comments"))
-        return [self._parse_comment(c) for c in data]
+        comments = [self._parse_comment(c) for c in data]
+
+        # Cache before returning
+        self._cache_set(
+            "github:get_pr_review_comments",
+            pr_number,
+            value=[c.model_dump() for c in comments],
+            ttl=self.TTL_SHORT,
+        )
+
+        return comments
 
     async def get_issue(self, issue_number: int) -> Issue:
         """Get an issue by number.
@@ -267,6 +364,11 @@ class GitHubClient:
         Returns:
             Issue object.
         """
+        # Check cache first
+        cached = self._cache_get("github:get_issue", issue_number)
+        if cached is not None:
+            return Issue(**cached)
+
         data = await self._request("GET", self._repo_path(f"/issues/{issue_number}"))
 
         # Get comments
@@ -274,7 +376,7 @@ class GitHubClient:
 
         state = IssueState.OPEN if data.get("state") == "open" else IssueState.CLOSED
 
-        return Issue(
+        issue = Issue(
             number=data.get("number", issue_number),
             title=data.get("title", ""),
             body=data.get("body"),
@@ -290,10 +392,32 @@ class GitHubClient:
             html_url=data.get("html_url"),
         )
 
+        # Cache before returning
+        self._cache_set(
+            "github:get_issue", issue_number, value=issue.model_dump(), ttl=self.TTL_SHORT
+        )
+
+        return issue
+
     async def get_issue_comments(self, issue_number: int) -> list[Comment]:
         """Get comments on an issue."""
+        # Check cache first
+        cached = self._cache_get("github:get_issue_comments", issue_number)
+        if cached is not None:
+            return [Comment(**c) for c in cached]
+
         data = await self._request("GET", self._repo_path(f"/issues/{issue_number}/comments"))
-        return [self._parse_comment(c) for c in data]
+        comments = [self._parse_comment(c) for c in data]
+
+        # Cache before returning
+        self._cache_set(
+            "github:get_issue_comments",
+            issue_number,
+            value=[c.model_dump() for c in comments],
+            ttl=self.TTL_SHORT,
+        )
+
+        return comments
 
     async def search_prs_for_commit(self, sha: str) -> list[int]:
         """Search for PRs that include a commit.
@@ -304,11 +428,21 @@ class GitHubClient:
         Returns:
             List of PR numbers.
         """
+        # Check cache first
+        cached = self._cache_get("github:search_prs_for_commit", sha)
+        if cached is not None:
+            return cached
+
         # GitHub search API
         query = f"repo:{self.owner}/{self.repo} type:pr {sha}"
         data = await self._request("GET", "/search/issues", params={"q": query, "per_page": 10})
 
-        return [item.get("number") for item in data.get("items", [])]
+        result = [item.get("number") for item in data.get("items", [])]
+
+        # Cache before returning
+        self._cache_set("github:search_prs_for_commit", sha, value=result, ttl=self.TTL_VOLATILE)
+
+        return result
 
     @staticmethod
     def _extract_linked_issues(body: str) -> list[int]:
@@ -324,8 +458,13 @@ class GitHubClient:
         Returns:
             Repository metadata.
         """
+        # Check cache first
+        cached = self._cache_get("github:get_repo_info")
+        if cached is not None:
+            return cached
+
         data = await self._request("GET", self._repo_path(""))
-        return {
+        result = {
             "name": data.get("name", ""),
             "full_name": data.get("full_name", ""),
             "description": data.get("description"),
@@ -342,6 +481,11 @@ class GitHubClient:
             "html_url": data.get("html_url"),
         }
 
+        # Cache before returning
+        self._cache_set("github:get_repo_info", value=result, ttl=self.TTL_MEDIUM)
+
+        return result
+
     async def get_commit(self, sha: str) -> dict:
         """Get commit details.
 
@@ -351,6 +495,11 @@ class GitHubClient:
         Returns:
             Commit details.
         """
+        # Check cache first (commits are immutable)
+        cached = self._cache_get("github:get_commit", sha)
+        if cached is not None:
+            return cached
+
         data = await self._request("GET", self._repo_path(f"/commits/{sha}"))
 
         commit_data = data.get("commit", {})
@@ -370,7 +519,7 @@ class GitHubClient:
                 }
             )
 
-        return {
+        result = {
             "sha": data.get("sha", sha),
             "message": commit_data.get("message", ""),
             "author": {
@@ -393,6 +542,11 @@ class GitHubClient:
             "html_url": data.get("html_url"),
         }
 
+        # Cache before returning (commits are immutable - never expire)
+        self._cache_set("github:get_commit", sha, value=result, ttl=self.TTL_IMMUTABLE)
+
+        return result
+
     async def list_commits(
         self,
         path: str | None = None,
@@ -411,6 +565,12 @@ class GitHubClient:
         Returns:
             List of commit summaries.
         """
+        # Check cache first (include all params in cache key)
+        cache_key_params = (path or "", sha or "", per_page, page)
+        cached = self._cache_get("github:list_commits", *cache_key_params)
+        if cached is not None:
+            return cached
+
         params: dict[str, str | int] = {"per_page": per_page, "page": page}
         if path:
             params["path"] = path
@@ -439,6 +599,9 @@ class GitHubClient:
                 }
             )
 
+        # Cache before returning
+        self._cache_set("github:list_commits", *cache_key_params, value=commits, ttl=self.TTL_MEDIUM)
+
         return commits
 
     async def get_file_contents(
@@ -455,6 +618,11 @@ class GitHubClient:
         Returns:
             File contents and metadata.
         """
+        # Check cache first (include path and ref in cache key)
+        cached = self._cache_get("github:get_file_contents", path, ref or "")
+        if cached is not None:
+            return cached
+
         params = {}
         if ref:
             params["ref"] = ref
@@ -468,7 +636,7 @@ class GitHubClient:
         # Handle file vs directory
         if isinstance(data, list):
             # It's a directory
-            return {
+            result = {
                 "type": "directory",
                 "path": path,
                 "entries": [
@@ -481,22 +649,29 @@ class GitHubClient:
                     for item in data
                 ],
             }
+        else:
+            import base64
 
-        import base64
+            content = ""
+            if data.get("encoding") == "base64" and data.get("content"):
+                content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
 
-        content = ""
-        if data.get("encoding") == "base64" and data.get("content"):
-            content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+            result = {
+                "type": "file",
+                "path": data.get("path", path),
+                "name": data.get("name", ""),
+                "size": data.get("size", 0),
+                "sha": data.get("sha", ""),
+                "content": content,
+                "html_url": data.get("html_url"),
+            }
 
-        return {
-            "type": "file",
-            "path": data.get("path", path),
-            "name": data.get("name", ""),
-            "size": data.get("size", 0),
-            "sha": data.get("sha", ""),
-            "content": content,
-            "html_url": data.get("html_url"),
-        }
+        # Cache before returning
+        self._cache_set(
+            "github:get_file_contents", path, ref or "", value=result, ttl=self.TTL_LONG
+        )
+
+        return result
 
     async def get_branches(self, per_page: int = 30) -> list[dict]:
         """Get repository branches.
@@ -507,13 +682,18 @@ class GitHubClient:
         Returns:
             List of branches.
         """
+        # Check cache first
+        cached = self._cache_get("github:get_branches", per_page)
+        if cached is not None:
+            return cached
+
         data = await self._request(
             "GET",
             self._repo_path("/branches"),
             params={"per_page": per_page},
         )
 
-        return [
+        result = [
             {
                 "name": b.get("name", ""),
                 "sha": b.get("commit", {}).get("sha", ""),
@@ -521,6 +701,11 @@ class GitHubClient:
             }
             for b in data
         ]
+
+        # Cache before returning
+        self._cache_set("github:get_branches", per_page, value=result, ttl=self.TTL_LONG)
+
+        return result
 
     async def get_tree(
         self,
@@ -536,6 +721,13 @@ class GitHubClient:
         Returns:
             Tree structure with all files and directories.
         """
+        # Check cache first (tree_sha might be resolved, so cache by original input)
+        cached = self._cache_get("github:get_tree", tree_sha, recursive)
+        if cached is not None:
+            return cached
+
+        original_tree_sha = tree_sha
+
         # If using HEAD or branch name, first get the commit to find tree SHA
         if tree_sha in ("HEAD", "main", "master") or not tree_sha.startswith(
             ("a", "b", "c", "d", "e", "f", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
@@ -585,12 +777,19 @@ class GitHubClient:
                 }
             )
 
-        return {
+        result = {
             "sha": data.get("sha", ""),
             "truncated": data.get("truncated", False),
             "total_entries": len(entries),
             "entries": entries,
         }
+
+        # Cache before returning (git trees are immutable - never expire)
+        self._cache_set(
+            "github:get_tree", original_tree_sha, recursive, value=result, ttl=self.TTL_IMMUTABLE
+        )
+
+        return result
 
     async def search_code(
         self,
@@ -608,6 +807,11 @@ class GitHubClient:
         Returns:
             Search results with code matches.
         """
+        # Check cache first
+        cached = self._cache_get("github:search_code", query, per_page, page)
+        if cached is not None:
+            return cached
+
         # Scope to this repository
         full_query = f"repo:{self.owner}/{self.repo} {query}"
 
@@ -635,11 +839,18 @@ class GitHubClient:
                 }
             )
 
-        return {
+        result = {
             "total_count": data.get("total_count", 0),
             "incomplete_results": data.get("incomplete_results", False),
             "items": results,
         }
+
+        # Cache before returning
+        self._cache_set(
+            "github:search_code", query, per_page, page, value=result, ttl=self.TTL_VOLATILE
+        )
+
+        return result
 
     async def search_commits(
         self,
@@ -657,6 +868,11 @@ class GitHubClient:
         Returns:
             Search results with commit matches.
         """
+        # Check cache first
+        cached = self._cache_get("github:search_commits", query, per_page, page)
+        if cached is not None:
+            return cached
+
         # Scope to this repository
         full_query = f"repo:{self.owner}/{self.repo} {query}"
 
@@ -715,11 +931,18 @@ class GitHubClient:
                 }
             )
 
-        return {
+        result = {
             "total_count": data.get("total_count", 0),
             "incomplete_results": data.get("incomplete_results", False),
             "items": results,
         }
+
+        # Cache before returning
+        self._cache_set(
+            "github:search_commits", query, per_page, page, value=result, ttl=self.TTL_VOLATILE
+        )
+
+        return result
 
     @classmethod
     def from_remote_url(cls, remote_url: str, token: str | None = None) -> "GitHubClient":

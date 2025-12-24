@@ -13,6 +13,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from ctm_mcp_server.data.cache import get_cache
 from ctm_mcp_server.data.git_repo import GitRepo, GitRepoError
 from ctm_mcp_server.data.github_client import GitHubClient, GitHubClientError
 from ctm_mcp_server.models.result_models import IntentType
@@ -20,6 +21,9 @@ from ctm_mcp_server.parsing.parser import CodeParser, ParserError
 
 # Create the MCP server instance
 server = Server("codebase-time-machine")
+
+# Initialize global cache for GitHub API responses
+_cache = get_cache(db_path="ctm_cache.db")
 
 
 @server.list_tools()
@@ -1267,7 +1271,7 @@ async def _blame_with_context(
 # GitHub API tool implementations
 async def _get_github_repo(owner: str, repo: str) -> dict[str, Any]:
     """Get GitHub repository info via API."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     info = await client.get_repo_info()
 
     return {
@@ -1280,7 +1284,7 @@ async def _get_github_repo(owner: str, repo: str) -> dict[str, Any]:
 
 async def _get_github_branches(owner: str, repo: str) -> dict[str, Any]:
     """Get GitHub repository branches via API."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     branches = await client.get_branches()
 
     return {
@@ -1293,7 +1297,7 @@ async def _get_github_branches(owner: str, repo: str) -> dict[str, Any]:
 
 async def _get_github_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
     """Get GitHub commit details via API (optimized for token efficiency)."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     commit = await client.get_commit(sha)
 
     # Remove patch data to reduce token usage (can be very large)
@@ -1329,7 +1333,7 @@ async def _get_github_file_history(
     owner: str, repo: str, path: str, max_commits: int
 ) -> dict[str, Any]:
     """Get file commit history via GitHub API."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     commits = await client.list_commits(path=path, per_page=max_commits)
 
     return {
@@ -1346,7 +1350,7 @@ async def _get_github_file(
     owner: str, repo: str, path: str, ref: str | None, max_size: int = 50000
 ) -> dict[str, Any]:
     """Get file contents via GitHub API (with configurable size limit for token efficiency)."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     file_data = await client.get_file_contents(path, ref=ref)
 
     # Truncate large files to prevent token explosion
@@ -1392,7 +1396,7 @@ def _truncate(text: str | None, max_len: int = 500) -> str | None:
 
 async def _get_pr(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
     """Get PR details via GitHub API (optimized for token efficiency)."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     pr = await client.get_pull_request(pr_number)
 
     # Limit and summarize to reduce token usage
@@ -1461,7 +1465,7 @@ async def _get_pr(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
 
 async def _get_issue(owner: str, repo: str, issue_number: int) -> dict[str, Any]:
     """Get issue details via GitHub API (optimized for token efficiency)."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     issue = await client.get_issue(issue_number)
 
     MAX_COMMENTS = 10
@@ -1496,7 +1500,7 @@ async def _get_issue(owner: str, repo: str, issue_number: int) -> dict[str, Any]
 
 async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
     """Search for PRs containing a commit via GitHub API."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     pr_numbers = await client.search_prs_for_commit(sha)
 
     return {
@@ -1512,7 +1516,7 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
 # Search tool implementations
 async def _search_github_code(owner: str, repo: str, query: str, per_page: int) -> dict[str, Any]:
     """Search for code in a GitHub repository."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     results = await client.search_code(query, per_page=per_page)
 
     return {
@@ -1531,7 +1535,7 @@ async def _search_github_commits(
     owner: str, repo: str, query: str, per_page: int
 ) -> dict[str, Any]:
     """Search for commits in a GitHub repository."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     results = await client.search_commits(query, per_page=per_page)
 
     return {
@@ -1590,7 +1594,7 @@ async def _get_github_file_symbols(
 ) -> dict[str, Any]:
     """Extract symbols from a GitHub file without cloning."""
     # First fetch the file content
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     file_data = await client.get_file_contents(path, ref=ref)
 
     if file_data.get("type") != "file":
@@ -1793,7 +1797,7 @@ async def _trace_github_symbol_history(
     owner: str, repo: str, path: str, symbol_name: str, max_commits: int
 ) -> dict[str, Any]:
     """Track a symbol's history across commits via GitHub API."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     parser = CodeParser()
 
     # Check language support
@@ -1947,7 +1951,7 @@ async def _trace_github_symbol_history(
 # Analysis tool implementations
 async def _get_code_context(owner: str, repo: str, path: str, max_commits: int) -> dict[str, Any]:
     """Get full decision chain: commits → PRs → issues for a file."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     # Get recent commits for this file
     commits = await client.list_commits(path=path, per_page=max_commits)
@@ -2039,7 +2043,7 @@ async def _get_code_context(owner: str, repo: str, path: str, max_commits: int) 
 
 async def _get_code_owners(owner: str, repo: str, path: str, max_commits: int) -> dict[str, Any]:
     """Find who knows this code best by analyzing commit history."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     # Get commits for this path
     commits = await client.list_commits(path=path, per_page=max_commits)
@@ -2112,7 +2116,7 @@ async def _get_change_coupling(
     owner: str, repo: str, path: str, max_commits: int, min_coupling: float
 ) -> dict[str, Any]:
     """Find files that frequently change together with the target file."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     # Get commits that touched this file
     commits = await client.list_commits(path=path, per_page=max_commits)
@@ -2187,7 +2191,7 @@ async def _get_activity_summary(
     """Get aggregated summary of repository activity."""
     from datetime import datetime, timedelta
 
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     # Calculate date threshold
     since_date = datetime.now() - timedelta(days=days)
@@ -2273,7 +2277,7 @@ async def _get_activity_summary(
 # Explanation & Onboarding tool implementations
 async def _explain_file(owner: str, repo: str, path: str, include_content: bool) -> dict[str, Any]:
     """Get comprehensive overview of a file."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     parser = CodeParser()
 
     # Get file content
@@ -2374,7 +2378,7 @@ async def _list_github_tree(
     max_depth: int | None,
 ) -> dict[str, Any]:
     """Get complete file tree of a repository."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     try:
         tree_data = await client.get_tree()
@@ -2440,7 +2444,7 @@ async def _list_github_tree(
 
 async def _explain_directory(owner: str, repo: str, path: str, _depth: int) -> dict[str, Any]:
     """Get overview of a directory structure."""
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     # Normalize path
     if path in (".", ""):
@@ -2527,7 +2531,7 @@ async def _get_recent_activity(
     """Get recent commit activity for a path."""
     from datetime import datetime, timedelta
 
-    client = GitHubClient(owner=owner, repo=repo)
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
 
     # Calculate date threshold
     since_date = datetime.now() - timedelta(days=days)
