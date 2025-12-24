@@ -72,7 +72,7 @@ export class CTMAgent {
             console.log(`[CTM Agent] History: ${this.conversationHistory.length} messages in conversation history`);
 
             const response = await this.anthropic.messages.create({
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-3-5-haiku-20241022',
                 max_tokens: 4000,
                 tools: tools,
                 messages: messages
@@ -149,25 +149,33 @@ export class CTMAgent {
                 });
 
                 // Prune conversation history to prevent unbounded growth
-                // IMPORTANT: Keep complete conversation turns (assistant + user pairs) to maintain tool_use/tool_result pairing
+                // CRITICAL: Keep complete conversation turns (assistant + user pairs) to maintain tool_use/tool_result pairing
                 const MAX_HISTORY_TURNS = 3; // Keep last 3 complete turns (6 messages: 3 assistant + 3 user)
                 const maxHistoryMessages = MAX_HISTORY_TURNS * 2; // Each turn = assistant + user message
 
                 if (this.conversationHistory.length > maxHistoryMessages + 1) {
+                    // Structure: [initial_user, assistant1, user1, assistant2, user2, ...]
+                    // We must keep complete (assistant, user) pairs to avoid breaking tool_use/tool_result pairing
+
                     const firstMessage = this.conversationHistory[0]; // Initial user prompt
+                    const withoutFirst = this.conversationHistory.slice(1); // All messages after initial
 
-                    // Ensure we keep complete turns by keeping an even number of recent messages
-                    // (assistant message with tool_use + user message with tool_result)
-                    let recentMessages = this.conversationHistory.slice(-maxHistoryMessages);
+                    // Each pair is (assistant, user), so we need an even number
+                    // Keep the last N pairs
+                    const pairsToKeep = Math.min(MAX_HISTORY_TURNS, Math.floor(withoutFirst.length / 2));
+                    const messagesToKeep = pairsToKeep * 2;
 
-                    // If we have an odd number, we're in the middle of a turn, keep one more
-                    if (recentMessages.length % 2 !== 0) {
-                        recentMessages = this.conversationHistory.slice(-(maxHistoryMessages + 1));
+                    // Get the last N complete pairs (skip any trailing unpaired message)
+                    const recentMessages = withoutFirst.slice(-messagesToKeep);
+
+                    // Verify we're starting with an assistant message (not orphaned user message)
+                    if (recentMessages.length > 0 && recentMessages[0].role !== 'assistant') {
+                        console.error('[CTM Agent] ERROR: Pruning would create orphaned tool_result! Skipping pruning.');
+                    } else {
+                        const prunedCount = withoutFirst.length - recentMessages.length;
+                        console.log(`[CTM Agent] Pruned ${prunedCount} old messages from history (keeping initial + ${recentMessages.length} messages = ${recentMessages.length / 2} turns)`);
+                        this.conversationHistory = [firstMessage, ...recentMessages];
                     }
-
-                    const prunedCount = this.conversationHistory.length - recentMessages.length - 1;
-                    console.log(`[CTM Agent] Pruned ${prunedCount} old messages from history (keeping initial + last ${recentMessages.length} messages = ${recentMessages.length / 2} turns)`);
-                    this.conversationHistory = [firstMessage, ...recentMessages];
                 }
             } else {
                 // No more tool calls, Claude has finished
