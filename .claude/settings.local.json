@@ -22,7 +22,10 @@
       "mcp__ctm__get_activity_summary",
       "mcp__ctm__trace_github_symbol_history",
       "mcp__ctm__search_github_commits",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(python:*)",
+      "Bash(ruff check:*)",
+      "mcp__ctm__get_local_line_context"
     ]
   },
   "enableAllProjectMcpServers": true,

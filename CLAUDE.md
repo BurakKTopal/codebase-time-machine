@@ -730,18 +730,23 @@ The CTM has 32 tools organized into 4 levels based on usage frequency and comple
 
 **For local Git repositories (not GitHub API)**
 
-| Tool | Speed | Equivalent GitHub Tool |
-|------|-------|----------------------|
-| `get_repo_info` | 🚀 1-2s | `get_github_repo` |
-| `list_branches` | ⚡ <1s | `get_github_branches` |
-| `get_commit` | 🚀 1-2s | `get_github_commit` |
-| `get_commit_diff` | 🚀 2-3s | - |
-| `trace_file_history` | 🚀 2-4s | `get_github_file_history` |
-| `get_file_at_commit` | 🚀 1-2s | `get_github_file` (with ref param) |
-| `explain_commit` | 🚀 2-3s | - |
-| `blame_with_context` | 🚀 3-5s | `get_line_context` (GitHub only) |
-| `get_file_symbols` | ⚡ <1s | `get_github_file_symbols` |
-| `trace_symbol_history` | 🐌 8-10s | `trace_github_symbol_history` |
+| Tool | Speed | Equivalent GitHub Tool | Notes |
+|------|-------|----------------------|-------|
+| `get_local_line_context` | ⚡ 2-4s | `get_line_context` | **Flagship local tool** - Auto-detects GitHub remote |
+| `get_repo_info` | 🚀 1-2s | `get_github_repo` | |
+| `list_branches` | ⚡ <1s | `get_github_branches` | |
+| `get_commit` | 🚀 1-2s | `get_github_commit` | |
+| `get_commit_diff` | 🚀 2-3s | - | |
+| `trace_file_history` | 🚀 2-4s | `get_github_file_history` | |
+| `get_file_at_commit` | 🚀 1-2s | `get_github_file` (with ref param) | |
+| `explain_commit` | 🚀 2-3s | - | |
+| `blame_with_context` | 🚀 3-5s | - | Basic blame (fallback) |
+| `get_file_symbols` | ⚡ <1s | `get_github_file_symbols` | |
+| `trace_symbol_history` | 🐌 8-10s | `trace_github_symbol_history` | |
+
+**Key Insight**: `get_local_line_context` bridges local and GitHub capabilities:
+- ✅ **Has GitHub remote?** → Full PR/issue/discussion context (same as `get_line_context`)
+- ⚠️ **No GitHub remote?** → Falls back to basic blame (same as `blame_with_context`)
 
 ---
 
@@ -863,7 +868,7 @@ get_github_file_history(
 ```
 ┌─ "Why does this LINE exist?"
 │  ├─ GitHub repo? → get_line_context ⚡ (PRIMARY)
-│  └─ Local repo? → blame_with_context 🚀
+│  └─ Local repo? → get_local_line_context ⚡ (auto-detects GitHub remote)
 │
 ┌─ "Why does this FILE exist?"
 │  ├─ Need full decision chain? → get_code_context 🐌

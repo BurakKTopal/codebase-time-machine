@@ -147,3 +147,38 @@ async def build_context_chain(
     return result
 
 
+def detect_github_remote(repo) -> tuple[str, str] | None:
+    """Detect GitHub remote from local repo.
+
+    Args:
+        repo: GitRepo instance
+
+    Returns:
+        (owner, repo) tuple if GitHub remote found, None otherwise
+    """
+    import re
+
+    try:
+        remotes = repo.get_remotes()
+        repo_obj = repo._repo
+
+        for remote_name in remotes:
+            try:
+                remote = repo_obj.remote(remote_name)
+                for url in remote.urls:
+                    # Match GitHub URLs:
+                    # https://github.com/owner/repo.git
+                    # git@github.com:owner/repo.git
+                    match = re.search(r"github\.com[/:]([^/]+)/([^/.]+?)(?:\.git)?$", url)
+                    if match:
+                        owner, repo_name = match.groups()
+                        return (owner, repo_name)
+            except Exception:
+                continue
+
+    except Exception:
+        pass
+
+    return None
+
+

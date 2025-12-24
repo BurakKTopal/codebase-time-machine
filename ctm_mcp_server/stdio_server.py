@@ -192,6 +192,40 @@ async def list_tools() -> list[Tool]:
                 "required": ["repo_path", "file_path"],
             },
         ),
+        Tool(
+            name="get_local_line_context",
+            description="Get line context for local repo with GitHub remote bridging. If the local repo has a GitHub remote, provides full PR/issue context like get_line_context. Otherwise falls back to basic blame. This is the flagship tool for local repos.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the local git repository",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the file (relative to repo root)",
+                    },
+                    "line_start": {
+                        "type": "integer",
+                        "description": "Starting line number (1-indexed)",
+                    },
+                    "line_end": {
+                        "type": "integer",
+                        "description": "Ending line number (default: same as line_start)",
+                    },
+                    "include_discussions": {
+                        "type": "boolean",
+                        "description": "Fetch PR/issue comments for richer context (slower but more complete, default: true)",
+                    },
+                    "history_depth": {
+                        "type": "integer",
+                        "description": "Number of historical commits to analyze (default: 1). Use 5-10 to find when code was originally added.",
+                    },
+                },
+                "required": ["repo_path", "file_path", "line_start"],
+            },
+        ),
         # GitHub API Tools - Work on ANY public repo without cloning
         Tool(
             name="get_github_repo",
@@ -867,6 +901,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("start_line"),
                 arguments.get("end_line"),
             )
+        elif name == "get_local_line_context":
+            result = await _get_local_line_context(
+                arguments["repo_path"],
+                arguments["file_path"],
+                arguments["line_start"],
+                arguments.get("line_end"),
+                arguments.get("include_discussions", True),
+                arguments.get("history_depth", 1),
+            )
         # GitHub API tools
         elif name == "get_github_repo":
             result = await _get_github_repo(arguments["owner"], arguments["repo"])
@@ -1405,6 +1448,55 @@ async def _blame_with_context(
             for line in blame_result.lines[:100]  # Limit output
         ],
     }
+
+
+async def _get_local_line_context(
+    repo_path: str,
+    file_path: str,
+    line_start: int,
+    line_end: int | None = None,
+    include_discussions: bool = True,
+    history_depth: int = 1,
+) -> dict[str, Any]:
+    """Get line context for local repo (bridges to GitHub if remote exists).
+
+    If local repo has GitHub remote, uses full get_line_context capabilities.
+    Otherwise falls back to basic blame.
+    """
+    from ctm_mcp_server.utils import detect_github_remote
+
+    repo = GitRepo(repo_path)
+    github_info = detect_github_remote(repo)
+
+    if github_info:
+        # Local repo has GitHub remote - use full context chain
+        owner, repo_name = github_info
+        result = await _get_line_context(
+            owner=owner,
+            repo=repo_name,
+            file_path=file_path,
+            line_start=line_start,
+            line_end=line_end or line_start,
+            include_discussions=include_discussions,
+            history_depth=history_depth,
+        )
+        result["source"] = "github_remote"
+        result["remote_url"] = f"https://github.com/{owner}/{repo_name}"
+        return result
+    else:
+        # No GitHub remote - fall back to basic blame
+        blame_result = await _blame_with_context(
+            repo_path=repo_path,
+            file_path=file_path,
+            start_line=line_start,
+            end_line=line_end,
+        )
+        blame_result["source"] = "local_only"
+        blame_result["note"] = (
+            "Local repo without GitHub remote. "
+            "Add a GitHub remote for full PR/issue context."
+        )
+        return blame_result
 
 
 # GitHub API tool implementations
