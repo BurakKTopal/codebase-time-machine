@@ -50,26 +50,45 @@ export class CTMAgent {
             iteration++;
             console.log(`[CTM Agent] Iteration ${iteration}/${maxIterations}`);
 
-            // Warn agent when approaching max iterations
-            let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
-            if (iteration === 5) {
-                userMessage = 'You\'re at iteration 5 of 10. If you have sufficient context to answer the question, provide your final summary now. Otherwise, continue investigating efficiently.';
-            } else if (iteration === 7) {
-                userMessage = 'IMPORTANT: You have only 3 iterations remaining. Start preparing your final summary based on what you\'ve found so far. If you have gathered sufficient context, provide your answer now.';
-            } else if (iteration === 9) {
-                userMessage = 'CRITICAL: This is your LAST iteration. You MUST provide a final summary now with all the context you\'ve gathered. Do NOT make any more tool calls.';
-            }
+            // Build messages array
+            // IMPORTANT: Only add a new user message if the last message in history is NOT already a user message
+            // (After tool results are added, the last message is already a user message)
+            let messages: Anthropic.MessageParam[];
 
-            const messages: Anthropic.MessageParam[] = [
-                ...this.conversationHistory,
-                { role: 'user', content: userMessage }
-            ];
+            const lastMessage = this.conversationHistory[this.conversationHistory.length - 1];
+            const needsUserMessage = !lastMessage || lastMessage.role !== 'user';
+
+            if (needsUserMessage) {
+                // First iteration or after Claude's text-only response - add user prompt
+                let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
+                if (iteration === 5) {
+                    userMessage = 'You\'re at iteration 5 of 10. If you have sufficient context to answer the question, provide your final summary now. Otherwise, continue investigating efficiently.';
+                } else if (iteration === 7) {
+                    userMessage = 'IMPORTANT: You have only 3 iterations remaining. Start preparing your final summary based on what you\'ve found so far. If you have gathered sufficient context, provide your answer now.';
+                } else if (iteration === 9) {
+                    userMessage = 'CRITICAL: This is your LAST iteration. You MUST provide a final summary now with all the context you\'ve gathered. Do NOT make any more tool calls.';
+                }
+
+                console.log('[CTM Agent] Adding new user message to history (last message was assistant or empty)');
+                messages = [
+                    ...this.conversationHistory,
+                    { role: 'user', content: userMessage }
+                ];
+            } else {
+                // Last message is already user message (tool results) - don't add another
+                console.log('[CTM Agent] Using existing tool_results as user message (not adding duplicate user message)');
+                messages = [...this.conversationHistory];
+            }
 
             // Calculate message sizes for verification
             const messagesSizeChars = JSON.stringify(messages).length;
             const messagesSizeKB = (messagesSizeChars / 1024).toFixed(2);
             console.log(`[CTM Agent] Sending ${messages.length} messages to Claude (${messagesSizeChars} chars / ${messagesSizeKB} KB)`);
             console.log(`[CTM Agent] History: ${this.conversationHistory.length} messages in conversation history`);
+
+            // Log message structure for debugging
+            const messageStructure = messages.map(m => m.role).join(' → ');
+            console.log(`[CTM Agent] Message flow: ${messageStructure}`);
 
             const response = await this.anthropic.messages.create({
                 model: 'claude-3-5-haiku-20241022',
