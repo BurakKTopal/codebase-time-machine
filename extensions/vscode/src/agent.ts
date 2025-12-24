@@ -40,7 +40,7 @@ export class CTMAgent {
 
         // Run agent loop
         let iteration = 0;
-        const maxIterations = 10;
+        const maxIterations = 15;
         let finalResponse = '';
         let collectedContext: any = {};
         let totalInputTokens = 0;
@@ -61,13 +61,8 @@ export class CTMAgent {
             if (needsUserMessage) {
                 // First iteration or after Claude's text-only response - add user prompt
                 let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
-                if (iteration === maxIterations - 5) {
-                    userMessage = `You're at iteration ${iteration} of ${maxIterations}. If you have sufficient context to answer the question, provide your final summary now. Otherwise, continue investigating efficiently.`;
-                } else if (iteration === maxIterations - 3) {
-                    const remaining = maxIterations - iteration;
-                    userMessage = `IMPORTANT: You have only ${remaining} iterations remaining. Start preparing your final summary based on what you've found so far. If you have gathered sufficient context, provide your answer now.`;
-                } else if (iteration === maxIterations - 1) {
-                    userMessage = 'CRITICAL: This is your LAST iteration. You MUST provide a final summary now with all the context you\'ve gathered. Do NOT make any more tool calls.';
+                if (iteration === maxIterations - 1) {
+                    userMessage = `CRITICAL: This is iteration ${iteration} of ${maxIterations} - your LAST chance to provide a final summary. You MUST synthesize everything you've learned and provide a complete answer NOW. Do NOT make any more tool calls - just provide your final answer with all the context you've gathered.`;
                 }
 
                 console.log('[CTM Agent] Adding new user message to history (last message was assistant or empty)');
@@ -94,7 +89,7 @@ export class CTMAgent {
             console.log(`[CTM Agent] Message flow: ${messageStructure}`);
 
             const response = await this.anthropic.messages.create({
-                model: 'claude-sonnet-4-5-20250929',
+                model: 'claude-3-5-haiku-20241022',
                 max_tokens: 4000,
                 tools: tools,
                 messages: messages
@@ -127,6 +122,37 @@ export class CTMAgent {
 
             if (toolUses.length > 0) {
                 console.log('[CTM Agent] Claude wants to use', toolUses.length, 'tool(s)');
+
+                // If we're at max iterations and agent is still trying to use tools, force a final summary
+                if (iteration >= maxIterations) {
+                    console.log('[CTM Agent] WARNING: At max iterations but agent still wants to use tools. Forcing final summary...');
+
+                    // DON'T add the tool_use assistant message to history (would break pairing)
+                    // Instead, make emergency call with existing history + demand for summary
+
+                    const emergencyMessages: Anthropic.MessageParam[] = [
+                        ...this.conversationHistory,
+                        {
+                            role: 'user',
+                            content: 'CRITICAL: You have reached the maximum iteration limit. Based on ALL the context you have gathered so far, provide your final summary RIGHT NOW. Do NOT attempt any more tool calls. Synthesize everything you learned and answer: Why does this code exist?'
+                        }
+                    ];
+
+                    // Make one emergency call to force a text response
+                    console.log('[CTM Agent] Making emergency call for final summary...');
+                    const emergencyResponse = await this.anthropic.messages.create({
+                        model: 'claude-3-5-haiku-20241022',
+                        max_tokens: 4000,
+                        messages: emergencyMessages
+                    });
+
+                    const emergencyText = emergencyResponse.content.find(block => block.type === 'text');
+                    if (emergencyText && emergencyText.type === 'text') {
+                        finalResponse = emergencyText.text;
+                    }
+
+                    break;
+                }
 
                 // Add assistant message to history
                 this.conversationHistory.push({
@@ -264,42 +290,62 @@ export class CTMAgent {
 - File: ${this.config.filePath}
 - Lines: ${this.config.lineStart}-${this.config.lineEnd}
 - Branch: ${this.config.branch || 'HEAD'}
-- Local repo: ${this.config.repoPath}
 
-**Goal:** Answer the question efficiently in 3-5 iterations. Focus on quality over exhaustive exploration.
+**You have a maximum of 15 iterations. Be efficient.**
 
-**Recommended Approach:**
+**REQUIRED FIRST STEP:**
 
-1. **Start with get_local_line_context** (often sufficient):
-   - owner: "${this.config.owner}"
-   - repo: "${this.config.repo}"
-   - file_path: "${this.config.filePath}"
-   - line_start: ${this.config.lineStart}
-   - line_end: ${this.config.lineEnd}
-   - ref: "${this.config.branch}"
-   - history_depth: 5-10 (use higher for older code)
-   - include_discussions: true
+Call get_local_line_context with these parameters:
+- repo_path: "${this.config.repoPath}"
+- file_path: "${this.config.filePath}"
+- line_start: ${this.config.lineStart}
+- line_end: ${this.config.lineEnd}
+- ref: "${this.config.branch || 'main'}"
+- history_depth: 7
+- include_discussions: true
 
-2. **If needed, use follow-up tools**:
-   - get_pr / get_issue: Get details on linked PRs/issues
-   - get_commit_diff: See what changed in a commit
-   - trace_symbol_history: Track how a function/class evolved
-   - get_file_at_commit: See code at a specific point in time
-   - Any other CTM tool that helps answer "why"
+This single call provides comprehensive context:
+- Current code content
+- Who added it and when (blame_commit)
+- Why it was added (commit message)
+- Full decision chain (PR, linked issues, discussions)
+- Historical context
 
-3. **Provide your answer** (2-4 paragraphs):
-   - What the code does
-   - Why it was added (the problem it solves)
-   - Key context from commits/PRs/issues
-   - Any relevant technical details
+**NEXT STEP - Analyze & Answer:**
 
-**Best Practices:**
-- get_local_line_context typically provides everything needed
-- Use batch operations when fetching multiple items
-- Prefer targeted tools (get_commit_diff) over broad ones (get_github_file)
-- Answer the question rather than exploring the entire codebase
+CRITICAL: Carefully analyze the get_local_line_context results:
 
-You have access to all CTM tools - use them wisely to provide a thorough answer efficiently.`;
+1. **READ THE ACTUAL CODE FIRST:**
+   - Look at the "current_content" field
+   - This is the EXACT code the user selected
+   - Understand what this specific code does
+
+2. **VERIFY THE BLAME COMMIT:**
+   - Read the "blame_commit" message
+   - Does it describe THIS specific code?
+   - WARNING: Git blame shows the LAST commit that touched these lines (might have just edited nearby code!)
+   - If the blame commit doesn't match the code content, check "historical_commits" to find the actual origin
+
+3. **PROVIDE YOUR ANSWER** (2-4 paragraphs) about THE CODE IN current_content:
+   - What THIS code does (describe the actual selected code!)
+   - Why it was added (from the correct commit, not a misleading blame)
+   - Key context from commit/PR/issue
+   - Technical decisions
+
+**In 80% of cases, get_local_line_context provides everything. Provide your answer immediately.**
+
+**Only if critical information is missing:**
+- get_pr: If PR number exists but you need more details
+- get_issue: If issue number exists but you need more context
+- get_commit_diff: If you need to see the exact code changes
+
+**DO NOT:**
+- Make redundant tool calls
+- Fetch files you don't need
+- Investigate unrelated code
+- Use multiple tools when one provides the answer
+
+Focus exclusively on: "Why does this code exist?" - Answer it clearly and stop.`;
     }
 
     private async getAvailableTools(): Promise<Anthropic.Tool[]> {
@@ -324,7 +370,7 @@ You have access to all CTM tools - use them wisely to provide a thorough answer 
         // Keep only the most relevant information for the agent
 
         const MAX_CONTENT_LENGTH = 2000; // Max chars for large text fields
-        const MAX_ARRAY_ITEMS = 5; // Max items to keep from arrays
+        const MAX_ARRAY_ITEMS = 10; // Max items to keep from arrays
 
         if (typeof result !== 'object' || result === null) {
             const str = JSON.stringify(result);
@@ -338,7 +384,9 @@ You have access to all CTM tools - use them wisely to provide a thorough answer 
         // Handle get_local_line_context and get_line_context specially
         if (toolName === 'get_local_line_context' || toolName === 'get_line_context') {
             // Keep essential fields, truncate large ones
-            if (result.line_content) truncated.line_content = result.line_content;
+            if (result.current_content) truncated.current_content = result.current_content; // NEW FORMAT
+            if (result.line_range) truncated.line_range = result.line_range; // NEW FORMAT
+            if (result.line_content) truncated.line_content = result.line_content; // OLD FORMAT (backwards compat)
             if (result.file_path) truncated.file_path = result.file_path;
             if (result.line_start) truncated.line_start = result.line_start;
             if (result.line_end) truncated.line_end = result.line_end;
