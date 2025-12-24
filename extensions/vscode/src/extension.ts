@@ -193,6 +193,16 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
             // Step 6: Show in panel
             progress.report({ increment: 90, message: "Displaying results..." });
             console.log('[CTM] Step 6: Displaying results in panel');
+
+            // Add file location to context if missing
+            if (!rawContext.file_path) {
+                rawContext.file_path = filePath;
+            }
+            if (!rawContext.line_range && !rawContext.line_start) {
+                rawContext.line_start = startLine;
+                rawContext.line_end = endLine;
+            }
+
             const panel = new ContextPanel();
             panel.show(summary, rawContext, context.extensionUri);
 

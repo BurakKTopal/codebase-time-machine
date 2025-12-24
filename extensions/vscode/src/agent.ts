@@ -43,14 +43,24 @@ export class CTMAgent {
         const maxIterations = 20;
         let finalResponse = '';
         let collectedContext: any = {};
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
 
         while (iteration < maxIterations) {
             iteration++;
             console.log(`[CTM Agent] Iteration ${iteration}/${maxIterations}`);
 
+            // Warn agent when approaching max iterations
+            let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
+            if (iteration === maxIterations - 5) {
+                userMessage = 'IMPORTANT: You have only 5 iterations remaining. Start preparing your final summary based on what you\'ve found so far.';
+            } else if (iteration === maxIterations - 1) {
+                userMessage = 'CRITICAL: This is your LAST iteration. You MUST provide a final summary now with all the context you\'ve gathered. Do NOT make any more tool calls.';
+            }
+
             const messages: Anthropic.MessageParam[] = [
                 ...this.conversationHistory,
-                iteration === 1 ? { role: 'user', content: initialPrompt } : { role: 'user', content: 'Continue your investigation.' }
+                { role: 'user', content: userMessage }
             ];
 
             console.log('[CTM Agent] Calling Claude with', tools.length, 'tools available');
@@ -64,6 +74,11 @@ export class CTMAgent {
 
             console.log('[CTM Agent] Response stop_reason:', response.stop_reason);
             console.log('[CTM Agent] Response usage:', response.usage);
+
+            // Track token usage
+            totalInputTokens += response.usage.input_tokens;
+            totalOutputTokens += response.usage.output_tokens;
+            console.log('[CTM Agent] Cumulative tokens - Input:', totalInputTokens, 'Output:', totalOutputTokens, 'Total:', totalInputTokens + totalOutputTokens);
 
             // Process response
             const textContent = response.content.find(block => block.type === 'text');
@@ -92,17 +107,23 @@ export class CTMAgent {
 
                         const result = await this.executeTool(toolUse.name, toolUse.input);
 
-                        // Store context if it's get_line_context
-                        if (toolUse.name === 'get_line_context') {
+                        // Store context if it's get_line_context or get_local_line_context
+                        if (toolUse.name === 'get_line_context' || toolUse.name === 'get_local_line_context') {
                             collectedContext = { ...collectedContext, ...result };
                         }
 
                         console.log('[CTM Agent] Tool result keys:', Object.keys(result));
 
+                        // Truncate tool result to reduce token usage
+                        const truncatedResult = this.truncateToolResult(toolUse.name, result);
+                        const originalSize = JSON.stringify(result).length;
+                        const truncatedSize = truncatedResult.length;
+                        console.log(`[CTM Agent] Tool result size: ${originalSize} -> ${truncatedSize} chars (${Math.round((1 - truncatedSize/originalSize) * 100)}% reduction)`);
+
                         toolResults.push({
                             type: 'tool_result',
                             tool_use_id: toolUse.id,
-                            content: JSON.stringify(result)
+                            content: truncatedResult
                         });
                     }
                 }
@@ -112,6 +133,17 @@ export class CTMAgent {
                     role: 'user',
                     content: toolResults
                 });
+
+                // Prune conversation history to prevent unbounded growth
+                // Keep first message (initial prompt) and last N messages
+                const MAX_HISTORY_MESSAGES = 8; // Keep last 8 messages (4 turns)
+                if (this.conversationHistory.length > MAX_HISTORY_MESSAGES + 1) {
+                    const firstMessage = this.conversationHistory[0];
+                    const recentMessages = this.conversationHistory.slice(-MAX_HISTORY_MESSAGES);
+                    const prunedCount = this.conversationHistory.length - MAX_HISTORY_MESSAGES - 1;
+                    console.log(`[CTM Agent] Pruned ${prunedCount} old messages from history`);
+                    this.conversationHistory = [firstMessage, ...recentMessages];
+                }
             } else {
                 // No more tool calls, Claude has finished
                 console.log('[CTM Agent] Investigation complete');
@@ -149,62 +181,35 @@ export class CTMAgent {
     }
 
     private buildInitialPrompt(): string {
-        return `You are a code archaeology expert investigating why specific code exists. Your goal is to answer: "Why does this code exist?"
+        return `Investigate why this code exists:
 
-**Investigation Target:**
-- Repository: ${this.config.owner}/${this.config.repo}
-- Local Path: ${this.config.repoPath}
+**Target:**
 - File: ${this.config.filePath}
 - Lines: ${this.config.lineStart}-${this.config.lineEnd}
-- Branch: ${this.config.branch || 'unknown'} (analyzing history from THIS branch)
+- Branch: ${this.config.branch || 'HEAD'}
 
-**CRITICAL - Analyzing LOCAL Code (Not GitHub):**
+**Instructions:**
+1. Call \`get_local_line_context\` with parameters:
+   - owner: "${this.config.owner}"
+   - repo: "${this.config.repo}"
+   - file_path: "${this.config.filePath}"
+   - line_start: ${this.config.lineStart}
+   - line_end: ${this.config.lineEnd}
+   - ref: "${this.config.branch}"
+   - history_depth: 5
+   - include_discussions: true
 
-You are analyzing the user's LOCAL repository files. The code you see is what's on their machine RIGHT NOW - it may have uncommitted or unpushed changes that don't exist on GitHub yet.
+2. If you need more context (only if get_local_line_context is insufficient):
+   - Use \`get_pr\` or \`get_issue\` for linked PRs/issues
+   - Use \`get_commit_diff\` to see what changed in a commit
+   - DO NOT fetch entire files unless absolutely necessary
 
-**TWO Types of Tools - When to Use Each:**
+3. Provide a concise 2-3 paragraph summary explaining:
+   - What the code does
+   - Why it was added (the problem it solves)
+   - Key context from commits/PRs/issues
 
-1. **Local Git Tools** (PREFERRED for code analysis):
-   - Tools: \`get_local_line_context\`, \`get_commit_diff\`, \`trace_file_history\`, \`get_file_at_commit\`, \`blame_with_context\`
-   - Parameters: Can use EITHER GitHub params OR local params (auto-translated)
-   - **IMPORTANT**: When calling \`get_local_line_context\`, ALWAYS pass \`ref: "${this.config.branch}"\` to analyze the correct branch
-   - Why prefer: Shows actual local code state, includes uncommitted changes in context
-   - **Use for**: Analyzing code content, diffs, file history, symbol tracking
-
-2. **GitHub API Tools** (for social context only):
-   - Tools: \`get_pr\`, \`get_issue\`, \`get_github_repo\`, \`get_code_context\`
-   - Parameters: \`owner\`, \`repo\`
-   - Why use: Access PRs, issues, discussions (not available locally)
-   - **Use for**: Understanding WHY decisions were made (PRs, issues)
-
-**Your Investigation Process:**
-
-1. **Start with LOCAL tools**: Use \`get_local_line_context\` as PRIMARY tool (analyzes local files).
-
-2. **Follow the Speed Hierarchy**:
-   - ⚡ INSTANT (<1s): get_file_at_commit (local), get_file_symbols (local)
-   - 🚀 FAST (1-5s): get_local_line_context (local), get_commit_diff (local), trace_file_history (local)
-   - 🚀 FAST (GitHub): get_pr, get_issue, get_github_commit (for PR/issue context)
-   - 🐌 SLOW (5-15s): get_code_context (GitHub), trace_symbol_history (local)
-   - 🐢 VERY SLOW (15-30s): search_github_code (LAST RESORT)
-
-3. **Key Principles**:
-   - Start with get_local_line_context (analyzes actual local code with history_depth=5-10)
-   - Use local tools for code/diffs: get_commit_diff, trace_file_history, get_file_at_commit
-   - Use GitHub tools for context: get_pr, get_issue (when commit is linked to them)
-   - Parameters auto-translate: you can use owner/repo params even for local tools
-   - Only go deeper if initial results don't answer the question
-   - Aim to complete in 3-5 tool calls maximum
-
-4. **Your Final Answer Should**:
-   - Explain WHAT the code does
-   - Explain WHY it was added (the problem it solves)
-   - Include context from commits, PRs, issues
-   - Note any technical considerations or trade-offs
-   - Be factual and objective (no conversational language)
-   - Be 2-4 paragraphs
-
-**Start your investigation now. Use get_local_line_context first to analyze the local code state.**`;
+**IMPORTANT**: Be efficient. Most questions can be answered with just get_local_line_context. Aim for 1-3 tool calls total.`;
     }
 
     private async getAvailableTools(): Promise<Anthropic.Tool[]> {
@@ -222,6 +227,129 @@ You are analyzing the user's LOCAL repository files. The code you see is what's 
         }));
 
         return anthropicTools;
+    }
+
+    private truncateToolResult(toolName: string, result: any): string {
+        // Intelligently truncate tool results to reduce token usage
+        // Keep only the most relevant information for the agent
+
+        const MAX_CONTENT_LENGTH = 2000; // Max chars for large text fields
+        const MAX_ARRAY_ITEMS = 5; // Max items to keep from arrays
+
+        if (typeof result !== 'object' || result === null) {
+            const str = JSON.stringify(result);
+            return str.length > MAX_CONTENT_LENGTH
+                ? str.substring(0, MAX_CONTENT_LENGTH) + '... [truncated]'
+                : str;
+        }
+
+        const truncated: any = {};
+
+        // Handle get_local_line_context and get_line_context specially
+        if (toolName === 'get_local_line_context' || toolName === 'get_line_context') {
+            // Keep essential fields, truncate large ones
+            if (result.line_content) truncated.line_content = result.line_content;
+            if (result.file_path) truncated.file_path = result.file_path;
+            if (result.line_start) truncated.line_start = result.line_start;
+            if (result.line_end) truncated.line_end = result.line_end;
+
+            // Truncate blame commit but keep key info
+            if (result.blame_commit) {
+                truncated.blame_commit = {
+                    sha: result.blame_commit.sha,
+                    author: result.blame_commit.author,
+                    date: result.blame_commit.date,
+                    message: this.truncateString(result.blame_commit.message, 500)
+                };
+            }
+
+            // Keep PR/issue summaries but truncate
+            if (result.pull_request) {
+                truncated.pull_request = {
+                    number: result.pull_request.number,
+                    title: result.pull_request.title,
+                    state: result.pull_request.state,
+                    body: this.truncateString(result.pull_request.body, 1000)
+                };
+            }
+
+            if (result.linked_issues && Array.isArray(result.linked_issues)) {
+                truncated.linked_issues = result.linked_issues.slice(0, 3).map((issue: any) => ({
+                    number: issue.number,
+                    title: issue.title,
+                    body: this.truncateString(issue.body, 500)
+                }));
+            }
+
+            // Historical commits - keep limited count
+            if (result.historical_commits && Array.isArray(result.historical_commits)) {
+                truncated.historical_commits = result.historical_commits.slice(0, 3).map((commit: any) => ({
+                    sha: commit.sha,
+                    author: commit.author,
+                    date: commit.date,
+                    message: this.truncateString(commit.message, 300)
+                }));
+            }
+
+            if (result.context_availability_score !== undefined) {
+                truncated.context_availability_score = result.context_availability_score;
+            }
+
+            return JSON.stringify(truncated);
+        }
+
+        // For file content tools, truncate aggressively
+        if (toolName === 'get_github_file' || toolName === 'get_file_at_commit') {
+            if (result.content) {
+                const lines = result.content.split('\n');
+                if (lines.length > 50) {
+                    truncated.content = lines.slice(0, 50).join('\n') + `\n... [${lines.length - 50} more lines truncated]`;
+                } else {
+                    truncated.content = result.content;
+                }
+            }
+            if (result.path) truncated.path = result.path;
+            if (result.sha) truncated.sha = result.sha;
+            return JSON.stringify(truncated);
+        }
+
+        // For commit history tools, limit array size
+        if (toolName === 'get_github_file_history' || toolName === 'trace_file_history') {
+            if (result.commits && Array.isArray(result.commits)) {
+                truncated.commits = result.commits.slice(0, MAX_ARRAY_ITEMS).map((c: any) => ({
+                    sha: c.sha,
+                    author: c.author,
+                    date: c.date,
+                    message: this.truncateString(c.message, 200)
+                }));
+                if (result.commits.length > MAX_ARRAY_ITEMS) {
+                    truncated.commits_truncated = `Showing ${MAX_ARRAY_ITEMS} of ${result.commits.length} commits`;
+                }
+            }
+            return JSON.stringify(truncated);
+        }
+
+        // Default: truncate all string fields and limit arrays
+        for (const key in result) {
+            if (typeof result[key] === 'string') {
+                truncated[key] = this.truncateString(result[key], MAX_CONTENT_LENGTH);
+            } else if (Array.isArray(result[key])) {
+                truncated[key] = result[key].slice(0, MAX_ARRAY_ITEMS);
+                if (result[key].length > MAX_ARRAY_ITEMS) {
+                    truncated[key + '_truncated'] = `Showing ${MAX_ARRAY_ITEMS} of ${result[key].length} items`;
+                }
+            } else {
+                truncated[key] = result[key];
+            }
+        }
+
+        return JSON.stringify(truncated);
+    }
+
+    private truncateString(str: string | undefined | null, maxLength: number): string {
+        if (!str) return '';
+        if (str.length <= maxLength) return str;
+        return str.substring(0, maxLength) + '... [truncated]';
     }
 
     private async executeTool(toolName: string, input: any): Promise<any> {
