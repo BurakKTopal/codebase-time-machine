@@ -40,7 +40,7 @@ export class CTMAgent {
 
         // Run agent loop
         let iteration = 0;
-        const maxIterations = 20;
+        const maxIterations = 10;
         let finalResponse = '';
         let collectedContext: any = {};
         let totalInputTokens = 0;
@@ -52,9 +52,11 @@ export class CTMAgent {
 
             // Warn agent when approaching max iterations
             let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
-            if (iteration === maxIterations - 5) {
-                userMessage = 'IMPORTANT: You have only 5 iterations remaining. Start preparing your final summary based on what you\'ve found so far.';
-            } else if (iteration === maxIterations - 1) {
+            if (iteration === 5) {
+                userMessage = 'You\'re at iteration 5 of 10. If you have sufficient context to answer the question, provide your final summary now. Otherwise, continue investigating efficiently.';
+            } else if (iteration === 7) {
+                userMessage = 'IMPORTANT: You have only 3 iterations remaining. Start preparing your final summary based on what you\'ve found so far. If you have gathered sufficient context, provide your answer now.';
+            } else if (iteration === 9) {
                 userMessage = 'CRITICAL: This is your LAST iteration. You MUST provide a final summary now with all the context you\'ve gathered. Do NOT make any more tool calls.';
             }
 
@@ -63,7 +65,11 @@ export class CTMAgent {
                 { role: 'user', content: userMessage }
             ];
 
-            console.log('[CTM Agent] Calling Claude with', tools.length, 'tools available');
+            // Calculate message sizes for verification
+            const messagesSizeChars = JSON.stringify(messages).length;
+            const messagesSizeKB = (messagesSizeChars / 1024).toFixed(2);
+            console.log(`[CTM Agent] Sending ${messages.length} messages to Claude (${messagesSizeChars} chars / ${messagesSizeKB} KB)`);
+            console.log(`[CTM Agent] History: ${this.conversationHistory.length} messages in conversation history`);
 
             const response = await this.anthropic.messages.create({
                 model: 'claude-sonnet-4-5-20250929',
@@ -75,10 +81,18 @@ export class CTMAgent {
             console.log('[CTM Agent] Response stop_reason:', response.stop_reason);
             console.log('[CTM Agent] Response usage:', response.usage);
 
-            // Track token usage
-            totalInputTokens += response.usage.input_tokens;
-            totalOutputTokens += response.usage.output_tokens;
-            console.log('[CTM Agent] Cumulative tokens - Input:', totalInputTokens, 'Output:', totalOutputTokens, 'Total:', totalInputTokens + totalOutputTokens);
+            // Track token usage with detailed breakdown
+            const iterationInputTokens = response.usage.input_tokens;
+            const iterationOutputTokens = response.usage.output_tokens;
+            totalInputTokens += iterationInputTokens;
+            totalOutputTokens += iterationOutputTokens;
+
+            console.log(`[CTM Agent] This iteration - Input: ${iterationInputTokens} tokens, Output: ${iterationOutputTokens} tokens`);
+            console.log(`[CTM Agent] CUMULATIVE - Input: ${totalInputTokens}, Output: ${totalOutputTokens}, Total: ${totalInputTokens + totalOutputTokens}`);
+
+            // Estimate chars-to-tokens ratio for verification (roughly 4 chars per token)
+            const estimatedTokens = Math.round(messagesSizeChars / 4);
+            console.log(`[CTM Agent] Verification: ${messagesSizeChars} chars ≈ ${estimatedTokens} estimated tokens vs ${iterationInputTokens} actual input tokens`);
 
             // Process response
             const textContent = response.content.find(block => block.type === 'text');
@@ -135,13 +149,24 @@ export class CTMAgent {
                 });
 
                 // Prune conversation history to prevent unbounded growth
-                // Keep first message (initial prompt) and last N messages
-                const MAX_HISTORY_MESSAGES = 8; // Keep last 8 messages (4 turns)
-                if (this.conversationHistory.length > MAX_HISTORY_MESSAGES + 1) {
-                    const firstMessage = this.conversationHistory[0];
-                    const recentMessages = this.conversationHistory.slice(-MAX_HISTORY_MESSAGES);
-                    const prunedCount = this.conversationHistory.length - MAX_HISTORY_MESSAGES - 1;
-                    console.log(`[CTM Agent] Pruned ${prunedCount} old messages from history`);
+                // IMPORTANT: Keep complete conversation turns (assistant + user pairs) to maintain tool_use/tool_result pairing
+                const MAX_HISTORY_TURNS = 3; // Keep last 3 complete turns (6 messages: 3 assistant + 3 user)
+                const maxHistoryMessages = MAX_HISTORY_TURNS * 2; // Each turn = assistant + user message
+
+                if (this.conversationHistory.length > maxHistoryMessages + 1) {
+                    const firstMessage = this.conversationHistory[0]; // Initial user prompt
+
+                    // Ensure we keep complete turns by keeping an even number of recent messages
+                    // (assistant message with tool_use + user message with tool_result)
+                    let recentMessages = this.conversationHistory.slice(-maxHistoryMessages);
+
+                    // If we have an odd number, we're in the middle of a turn, keep one more
+                    if (recentMessages.length % 2 !== 0) {
+                        recentMessages = this.conversationHistory.slice(-(maxHistoryMessages + 1));
+                    }
+
+                    const prunedCount = this.conversationHistory.length - recentMessages.length - 1;
+                    console.log(`[CTM Agent] Pruned ${prunedCount} old messages from history (keeping initial + last ${recentMessages.length} messages = ${recentMessages.length / 2} turns)`);
                     this.conversationHistory = [firstMessage, ...recentMessages];
                 }
             } else {
@@ -174,6 +199,15 @@ export class CTMAgent {
 
         console.log('[CTM Agent] Final response length:', finalResponse.length, 'chars');
 
+        // Log final token usage summary
+        console.log('\n========== TOKEN USAGE SUMMARY ==========');
+        console.log(`Total iterations: ${iteration}`);
+        console.log(`Total input tokens: ${totalInputTokens}`);
+        console.log(`Total output tokens: ${totalOutputTokens}`);
+        console.log(`TOTAL TOKENS: ${totalInputTokens + totalOutputTokens}`);
+        console.log(`Average per iteration: ${Math.round((totalInputTokens + totalOutputTokens) / iteration)} tokens`);
+        console.log('=========================================\n');
+
         return {
             summary: finalResponse || 'Investigation completed but no summary was generated.',
             rawContext: collectedContext
@@ -181,35 +215,48 @@ export class CTMAgent {
     }
 
     private buildInitialPrompt(): string {
-        return `Investigate why this code exists:
+        return `Investigate: "Why does this code exist?"
 
 **Target:**
 - File: ${this.config.filePath}
 - Lines: ${this.config.lineStart}-${this.config.lineEnd}
 - Branch: ${this.config.branch || 'HEAD'}
+- Local repo: ${this.config.repoPath}
 
-**Instructions:**
-1. Call \`get_local_line_context\` with parameters:
+**Goal:** Answer the question efficiently in 3-5 iterations. Focus on quality over exhaustive exploration.
+
+**Recommended Approach:**
+
+1. **Start with get_local_line_context** (often sufficient):
    - owner: "${this.config.owner}"
    - repo: "${this.config.repo}"
    - file_path: "${this.config.filePath}"
    - line_start: ${this.config.lineStart}
    - line_end: ${this.config.lineEnd}
    - ref: "${this.config.branch}"
-   - history_depth: 5
+   - history_depth: 5-10 (use higher for older code)
    - include_discussions: true
 
-2. If you need more context (only if get_local_line_context is insufficient):
-   - Use \`get_pr\` or \`get_issue\` for linked PRs/issues
-   - Use \`get_commit_diff\` to see what changed in a commit
-   - DO NOT fetch entire files unless absolutely necessary
+2. **If needed, use follow-up tools**:
+   - get_pr / get_issue: Get details on linked PRs/issues
+   - get_commit_diff: See what changed in a commit
+   - trace_symbol_history: Track how a function/class evolved
+   - get_file_at_commit: See code at a specific point in time
+   - Any other CTM tool that helps answer "why"
 
-3. Provide a concise 2-3 paragraph summary explaining:
+3. **Provide your answer** (2-4 paragraphs):
    - What the code does
    - Why it was added (the problem it solves)
    - Key context from commits/PRs/issues
+   - Any relevant technical details
 
-**IMPORTANT**: Be efficient. Most questions can be answered with just get_local_line_context. Aim for 1-3 tool calls total.`;
+**Best Practices:**
+- get_local_line_context typically provides everything needed
+- Use batch operations when fetching multiple items
+- Prefer targeted tools (get_commit_diff) over broad ones (get_github_file)
+- Answer the question rather than exploring the entire codebase
+
+You have access to all CTM tools - use them wisely to provide a thorough answer efficiently.`;
     }
 
     private async getAvailableTools(): Promise<Anthropic.Tool[]> {
