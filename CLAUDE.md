@@ -673,6 +673,288 @@ Would you like me to search for related changes or check who the author is?"
 
 ---
 
+## Tool Categories: Finding the Right Tool
+
+The CTM has 32 tools organized into 4 levels based on usage frequency and complexity. **Start with Level 1** for most investigations.
+
+### Level 1: Essential Tools ⭐ (Use These First)
+
+**For 90% of use cases - master these first**
+
+| Tool | Speed | Primary Use Case |
+|------|-------|------------------|
+| `get_line_context` | ⚡ 2-4s | **PRIMARY TOOL** - Why does this line exist? |
+| `get_github_file` | ⚡ <1s | Get file content quickly |
+| `explain_file` | 🚀 3-5s | What does this file do? Who works on it? |
+| `list_github_tree` | ⚡ 1s | Browse repository structure |
+| `get_github_file_history` | 🚀 2-3s | What changed in this file? |
+
+**Default choice**: When in doubt, start with `get_line_context`.
+
+### Level 2: Analysis Tools (Common Operations)
+
+**When you need deeper investigation**
+
+| Tool | Speed | Primary Use Case |
+|------|-------|------------------|
+| `trace_github_symbol_history` | 🐌 8-10s | How did this function/class evolve over time? |
+| `get_code_owners` | 🚀 3-5s | Who knows this code best? Who to ask? |
+| `get_change_coupling` | 🐌 8-10s | What files change together? Hidden dependencies? |
+| `get_activity_summary` | 🐌 5-8s | Repository activity overview, team patterns |
+| `get_recent_activity` | 🚀 3-5s | What changed recently in file/directory? |
+| `get_github_file_symbols` | ⚡ <1s | Extract functions/classes from a file |
+
+### Level 3: Advanced Tools (Specialized Use Cases)
+
+**Use when specific need arises**
+
+| Tool | Speed | Primary Use Case | Note |
+|------|-------|------------------|------|
+| `get_code_context` | 🐌 10-15s | File-wide decision chain (commits → PRs → issues) | Consider `get_line_context` first |
+| `explain_directory` | 🚀 3-5s | Understand directory purpose and structure | |
+| `get_github_commits_batch` | 🚀 3-5s | Fetch 5-10 commits at once (optimization) | |
+| `search_prs_for_commit` | 🚀 2-3s | Find PRs containing specific commit | |
+| `get_pr` | 🚀 2-3s | Get PR details with comments/reviews | |
+| `get_issue` | 🚀 2-3s | Get issue details with comments | |
+
+### Level 4: Search & Exploration (Last Resort)
+
+**Use only when navigation isn't possible**
+
+| Tool | Speed | Primary Use Case | Warning |
+|------|-------|------------------|---------|
+| `search_github_code` | 🐢 15-30s | Search entire codebase for code patterns | **SLOW** - prefer navigation |
+| `search_github_commits` | 🐢 15-30s | Search all commits with complex queries | **SLOW** - prefer file history |
+
+### Local Repository Tools
+
+**For local Git repositories (not GitHub API)**
+
+| Tool | Speed | Equivalent GitHub Tool |
+|------|-------|----------------------|
+| `get_repo_info` | 🚀 1-2s | `get_github_repo` |
+| `list_branches` | ⚡ <1s | `get_github_branches` |
+| `get_commit` | 🚀 1-2s | `get_github_commit` |
+| `get_commit_diff` | 🚀 2-3s | - |
+| `trace_file_history` | 🚀 2-4s | `get_github_file_history` |
+| `get_file_at_commit` | 🚀 1-2s | `get_github_file` (with ref param) |
+| `explain_commit` | 🚀 2-3s | - |
+| `blame_with_context` | 🚀 3-5s | `get_line_context` (GitHub only) |
+| `get_file_symbols` | ⚡ <1s | `get_github_file_symbols` |
+| `trace_symbol_history` | 🐌 8-10s | `trace_github_symbol_history` |
+
+---
+
+## Quick Start: 5 Tools for New Users
+
+If you're new to CTM, **focus on these 5 tools** that handle 90% of investigations:
+
+### 1. `get_line_context` - Your Primary Tool ⭐
+
+**Answer**: "Why does this line exist?"
+**Speed**: ⚡ 2-4 seconds
+**What you get**: Current content, blame commit, PR, linked issues, discussions, confidence score
+
+**Example**:
+```python
+get_line_context(
+    owner="kubernetes",
+    repo="kubernetes",
+    file_path="pkg/kubelet/kubelet.go",
+    line_start=142,
+    line_end=142,
+    include_discussions=true,
+    history_depth=5  # Look back 5 commits to find original introduction
+)
+```
+
+**When to use**:
+- ✅ Investigating suspicious code
+- ✅ Understanding design decisions
+- ✅ Finding who/when/why for specific lines
+- ✅ **Default choice** - start here for most questions
+
+### 2. `get_github_file` - Read Files Fast
+
+**Answer**: "What's in this file?"
+**Speed**: ⚡ < 1 second
+
+**Example**:
+```python
+get_github_file(
+    owner="kubernetes",
+    repo="kubernetes",
+    path="pkg/kubelet/kubelet.go"
+)
+```
+
+**When to use**:
+- ✅ Reading code quickly
+- ✅ Understanding current implementation
+- ✅ Before using other tools (know what you're investigating)
+
+### 3. `explain_file` - Understand Files
+
+**Answer**: "What does this file do? Who works on it? What's its history?"
+**Speed**: 🚀 3-5 seconds
+**What you get**: Purpose, key symbols, recent changes, top contributors
+
+**Example**:
+```python
+explain_file(
+    owner="kubernetes",
+    repo="kubernetes",
+    path="pkg/kubelet/kubelet.go"
+)
+```
+
+**When to use**:
+- ✅ Onboarding to new codebase
+- ✅ Understanding file purpose
+- ✅ Finding code owners
+
+### 4. `list_github_tree` - Explore Structure
+
+**Answer**: "What files exist? How is the code organized?"
+**Speed**: ⚡ 1 second
+
+**Example**:
+```python
+list_github_tree(
+    owner="kubernetes",
+    repo="kubernetes",
+    path_prefix="pkg/kubelet/",  # Optional filter
+    extension=".go"               # Optional filter
+)
+```
+
+**When to use**:
+- ✅ Exploring unfamiliar codebase
+- ✅ Finding related files
+- ✅ Understanding project structure
+
+### 5. `get_github_file_history` - See Changes
+
+**Answer**: "What changed in this file recently?"
+**Speed**: 🚀 2-3 seconds
+**What you get**: List of commits that modified the file
+
+**Example**:
+```python
+get_github_file_history(
+    owner="kubernetes",
+    repo="kubernetes",
+    path="pkg/kubelet/kubelet.go",
+    max_commits=20
+)
+```
+
+**When to use**:
+- ✅ Understanding file evolution
+- ✅ Finding when bugs were introduced
+- ✅ Seeing recent activity
+
+---
+
+## Tool Selection Decision Tree
+
+**START**: What does the user want to know?
+
+```
+┌─ "Why does this LINE exist?"
+│  ├─ GitHub repo? → get_line_context ⚡ (PRIMARY)
+│  └─ Local repo? → blame_with_context 🚀
+│
+┌─ "Why does this FILE exist?"
+│  ├─ Need full decision chain? → get_code_context 🐌
+│  └─ Just overview/summary? → explain_file 🚀
+│
+┌─ "What's in this file/repo?"
+│  ├─ File content? → get_github_file ⚡
+│  ├─ Just list files? → list_github_tree ⚡
+│  ├─ Understand directory? → explain_directory 🚀
+│  └─ Extract functions/classes? → get_github_file_symbols ⚡
+│
+┌─ "How did X change over time?"
+│  ├─ Specific function/class? → trace_github_symbol_history 🐌
+│  ├─ Entire file? → get_github_file_history 🚀
+│  └─ Recent changes only? → get_recent_activity 🚀
+│
+┌─ "Who should I ask about this code?"
+│  └─ get_code_owners 🚀
+│
+┌─ "What changes with this file?"
+│  └─ get_change_coupling 🐌
+│
+┌─ "What's the PR/issue for this commit?"
+│  ├─ Have commit SHA? → search_prs_for_commit 🚀
+│  ├─ Need PR details? → get_pr 🚀
+│  └─ Need issue details? → get_issue 🚀
+│
+┌─ "Find code matching X"
+│  ├─ Know the file path? → get_github_file or grep ⚡
+│  ├─ Know the directory? → list_github_tree + filter ⚡
+│  └─ No path, must search entire repo? → search_github_code 🐢 (SLOW, last resort)
+│
+┌─ "Find commits matching X"
+│  ├─ For specific file? → get_github_file_history 🚀
+│  └─ Repo-wide search? → search_github_commits 🐢 (SLOW, last resort)
+│
+┌─ "What's happening in this repo?"
+│  ├─ Overall activity? → get_activity_summary 🐌
+│  └─ Recent changes? → get_recent_activity 🚀
+```
+
+**Default Path**: Start with `get_line_context` for most code investigation questions.
+
+---
+
+## Tool Comparison: Similar Tools, Different Use Cases
+
+When multiple tools seem similar, here's how to choose:
+
+### `get_line_context` vs `get_code_context`
+
+| Aspect | `get_line_context` | `get_code_context` |
+|--------|-------------------|-------------------|
+| **Scope** | Line-specific (targeted) | File-wide (comprehensive) |
+| **Speed** | ⚡ 2-4s | 🐌 10-15s |
+| **Use when** | Investigating specific code | Need full file story |
+| **Avoid when** | Need file-wide history | Line-specific question |
+| **Recommendation** | **Start here** - works for 90% of cases | Use if line context insufficient |
+
+### `list_github_tree` vs `explain_directory`
+
+| Aspect | `list_github_tree` | `explain_directory` |
+|--------|-------------------|---------------------|
+| **Output** | Raw file list | Analyzed overview |
+| **Speed** | ⚡ 1s | 🚀 3-5s |
+| **Use when** | Just need file listing | Understanding purpose |
+| **Avoid when** | Need analysis/context | Just need file list |
+| **Recommendation** | Quick exploration | Understanding what directory does |
+
+### `get_github_file_history` vs `trace_github_symbol_history`
+
+| Aspect | `get_github_file_history` | `trace_github_symbol_history` |
+|--------|--------------------------|------------------------------|
+| **Scope** | Entire file | Specific function/class |
+| **Speed** | 🚀 2-3s | 🐌 8-10s |
+| **Use when** | File changes | Function evolution |
+| **Avoid when** | Tracking specific symbol | File-wide history |
+| **Recommendation** | Start here, then drill down | When investigating specific function |
+
+### `search_github_code` vs `search_github_commits`
+
+| Aspect | `search_github_code` | `search_github_commits` |
+|--------|---------------------|------------------------|
+| **Searches** | Code content | Commit messages/metadata |
+| **Speed** | 🐢 15-30s | 🐢 15-30s |
+| **Use when** | No file path known | Complex commit queries |
+| **Avoid when** | Know file/directory | File-specific history |
+| **Recommendation** | **Last resort** - prefer navigation | **Last resort** - prefer file history |
+
+---
+
 ## Remember
 
 🎯 **Your Job**: Synthesize information into insights
