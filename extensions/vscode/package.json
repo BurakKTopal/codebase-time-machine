@@ -1,0 +1,70 @@
+{
+  "name": "codebase-time-machine",
+  "displayName": "Codebase Time Machine",
+  "description": "Understand why code exists, not just what it does",
+  "version": "0.1.0",
+  "publisher": "burak",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ctm.whyDoesThisExist",
+        "title": "CTM: Why does this code exist?"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ctm.whyDoesThisExist",
+          "group": "navigation",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Codebase Time Machine",
+      "properties": {
+        "ctm.anthropicApiKey": {
+          "type": "string",
+          "description": "Anthropic API key for AI summaries (get one at https://console.anthropic.com/)",
+          "default": ""
+        },
+        "ctm.serverCommand": {
+          "type": "string",
+          "description": "Command to start CTM server",
+          "default": "uv"
+        },
+        "ctm.serverArgs": {
+          "type": "array",
+          "description": "Arguments for CTM server command",
+          "default": ["run", "ctm-server"]
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@anthropic-ai/sdk": "^0.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.0.0"
+  }
+}
