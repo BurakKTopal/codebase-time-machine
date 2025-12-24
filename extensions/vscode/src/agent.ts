@@ -61,19 +61,22 @@ export class CTMAgent {
             if (needsUserMessage) {
                 // First iteration or after Claude's text-only response - add user prompt
                 let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
-                if (iteration === 5) {
-                    userMessage = 'You\'re at iteration 5 of 10. If you have sufficient context to answer the question, provide your final summary now. Otherwise, continue investigating efficiently.';
-                } else if (iteration === 7) {
-                    userMessage = 'IMPORTANT: You have only 3 iterations remaining. Start preparing your final summary based on what you\'ve found so far. If you have gathered sufficient context, provide your answer now.';
-                } else if (iteration === 9) {
+                if (iteration === maxIterations - 5) {
+                    userMessage = `You're at iteration ${iteration} of ${maxIterations}. If you have sufficient context to answer the question, provide your final summary now. Otherwise, continue investigating efficiently.`;
+                } else if (iteration === maxIterations - 3) {
+                    const remaining = maxIterations - iteration;
+                    userMessage = `IMPORTANT: You have only ${remaining} iterations remaining. Start preparing your final summary based on what you've found so far. If you have gathered sufficient context, provide your answer now.`;
+                } else if (iteration === maxIterations - 1) {
                     userMessage = 'CRITICAL: This is your LAST iteration. You MUST provide a final summary now with all the context you\'ve gathered. Do NOT make any more tool calls.';
                 }
 
                 console.log('[CTM Agent] Adding new user message to history (last message was assistant or empty)');
-                messages = [
-                    ...this.conversationHistory,
-                    { role: 'user', content: userMessage }
-                ];
+
+                // CRITICAL: Add the user message to conversation history so it's persisted
+                const userMessageParam: Anthropic.MessageParam = { role: 'user', content: userMessage };
+                this.conversationHistory.push(userMessageParam);
+
+                messages = [...this.conversationHistory];
             } else {
                 // Last message is already user message (tool results) - don't add another
                 console.log('[CTM Agent] Using existing tool_results as user message (not adding duplicate user message)');
@@ -91,7 +94,7 @@ export class CTMAgent {
             console.log(`[CTM Agent] Message flow: ${messageStructure}`);
 
             const response = await this.anthropic.messages.create({
-                model: 'claude-3-5-haiku-20241022',
+                model: 'claude-sonnet-4-5-20250929',
                 max_tokens: 4000,
                 tools: tools,
                 messages: messages
@@ -151,7 +154,7 @@ export class CTMAgent {
                         const truncatedResult = this.truncateToolResult(toolUse.name, result);
                         const originalSize = JSON.stringify(result).length;
                         const truncatedSize = truncatedResult.length;
-                        console.log(`[CTM Agent] Tool result size: ${originalSize} -> ${truncatedSize} chars (${Math.round((1 - truncatedSize/originalSize) * 100)}% reduction)`);
+                        console.log(`[CTM Agent] Tool result size: ${originalSize} -> ${truncatedSize} chars (${Math.round((1 - truncatedSize / originalSize) * 100)}% reduction)`);
 
                         toolResults.push({
                             type: 'tool_result',
