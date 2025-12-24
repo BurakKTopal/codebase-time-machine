@@ -173,28 +173,41 @@ export class CTMAgent {
                 const maxHistoryMessages = MAX_HISTORY_TURNS * 2; // Each turn = assistant + user message
 
                 if (this.conversationHistory.length > maxHistoryMessages + 1) {
+                    console.log('[CTM Agent] === PRUNING DEBUG ===');
+                    console.log('[CTM Agent] History before pruning:', this.conversationHistory.map(m => m.role).join(' → '));
+                    console.log('[CTM Agent] Total messages:', this.conversationHistory.length);
+
                     // Structure: [initial_user, assistant1, user1, assistant2, user2, ...]
                     // We must keep complete (assistant, user) pairs to avoid breaking tool_use/tool_result pairing
 
                     const firstMessage = this.conversationHistory[0]; // Initial user prompt
+                    console.log('[CTM Agent] First message role:', firstMessage?.role);
+
                     const withoutFirst = this.conversationHistory.slice(1); // All messages after initial
+                    console.log('[CTM Agent] Messages after first:', withoutFirst.length);
 
                     // Each pair is (assistant, user), so we need an even number
                     // Keep the last N pairs
                     const pairsToKeep = Math.min(MAX_HISTORY_TURNS, Math.floor(withoutFirst.length / 2));
                     const messagesToKeep = pairsToKeep * 2;
+                    console.log('[CTM Agent] Keeping', pairsToKeep, 'pairs =', messagesToKeep, 'messages');
 
                     // Get the last N complete pairs (skip any trailing unpaired message)
                     const recentMessages = withoutFirst.slice(-messagesToKeep);
+                    console.log('[CTM Agent] Recent messages:', recentMessages.map(m => m.role).join(' → '));
 
                     // Verify we're starting with an assistant message (not orphaned user message)
                     if (recentMessages.length > 0 && recentMessages[0].role !== 'assistant') {
                         console.error('[CTM Agent] ERROR: Pruning would create orphaned tool_result! Skipping pruning.');
+                        console.error('[CTM Agent] First recent message role:', recentMessages[0].role);
                     } else {
                         const prunedCount = withoutFirst.length - recentMessages.length;
-                        console.log(`[CTM Agent] Pruned ${prunedCount} old messages from history (keeping initial + ${recentMessages.length} messages = ${recentMessages.length / 2} turns)`);
+                        console.log(`[CTM Agent] Pruning ${prunedCount} old messages`);
                         this.conversationHistory = [firstMessage, ...recentMessages];
+                        console.log('[CTM Agent] History after pruning:', this.conversationHistory.map(m => m.role).join(' → '));
+                        console.log('[CTM Agent] Total after pruning:', this.conversationHistory.length);
                     }
+                    console.log('[CTM Agent] === END PRUNING DEBUG ===');
                 }
             } else {
                 // No more tool calls, Claude has finished
