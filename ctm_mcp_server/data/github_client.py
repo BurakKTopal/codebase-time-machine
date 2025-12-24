@@ -103,9 +103,7 @@ class GitHubClient:
             return None
         return self.cache.get(namespace, self.owner, self.repo, *args)
 
-    def _cache_set(
-        self, namespace: str, *args, value: dict, ttl: int | None = None
-    ) -> None:
+    def _cache_set(self, namespace: str, *args, value: dict, ttl: int | None = None) -> None:
         """Set value in cache if cache is enabled.
 
         Args:
@@ -600,7 +598,9 @@ class GitHubClient:
             )
 
         # Cache before returning
-        self._cache_set("github:list_commits", *cache_key_params, value=commits, ttl=self.TTL_MEDIUM)
+        self._cache_set(
+            "github:list_commits", *cache_key_params, value=commits, ttl=self.TTL_MEDIUM
+        )
 
         return commits
 

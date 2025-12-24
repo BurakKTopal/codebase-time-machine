@@ -761,6 +761,41 @@ async def list_tools() -> list[Tool]:
                 "required": ["owner", "repo"],
             },
         ),
+        Tool(
+            name="get_line_context",
+            description="Gather all context about why specific lines of code exist. Aggregates: blame → commit → PR → issues → discussions. Returns structured data for LLM reasoning. This is the flagship tool for answering 'Why does this code exist?'",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to file relative to repo root",
+                    },
+                    "line_start": {
+                        "type": "integer",
+                        "description": "Starting line number (1-indexed)",
+                    },
+                    "line_end": {
+                        "type": "integer",
+                        "description": "Ending line number (default: same as line_start)",
+                    },
+                    "include_discussions": {
+                        "type": "boolean",
+                        "description": "Fetch PR/issue comments for richer context (slower but more complete)",
+                        "default": True,
+                    },
+                },
+                "required": ["owner", "repo", "file_path", "line_start"],
+            },
+        ),
     ]
 
 
@@ -938,6 +973,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("path"),
                 arguments.get("days", 14),
                 arguments.get("max_commits", 20),
+            )
+        elif name == "get_line_context":
+            result = await _get_line_context(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["file_path"],
+                arguments["line_start"],
+                arguments.get("line_end"),
+                arguments.get("include_discussions", True),
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
@@ -1205,6 +1249,65 @@ async def _explain_commit(repo_path: str, sha: str) -> dict[str, Any]:
     if keywords_found:
         summary += f" based on keywords: {', '.join(keywords_found)}"
 
+    # Build evidence list
+    evidence = []
+    is_merge = commit.is_merge_commit or subject_lower.startswith("merge")
+
+    if is_merge:
+        evidence.append({"source": "commit_type", "signal": "merge commit", "weight": 0.95})
+    elif conventional_type:
+        evidence.append(
+            {"source": "conventional_commit", "signal": f"type: {conventional_type}", "weight": 0.9}
+        )
+    else:
+        for keyword in keywords_found:
+            evidence.append(
+                {"source": "message_keywords", "signal": f"contains '{keyword}'", "weight": 0.15}
+            )
+
+    # Additional evidence sources
+    if commit.pr_number:
+        evidence.append(
+            {
+                "source": "pr_reference",
+                "signal": f"references PR #{commit.pr_number}",
+                "weight": 0.3,
+            }
+        )
+    if commit.issue_numbers:
+        for issue_num in commit.issue_numbers[:2]:  # Limit to first 2
+            evidence.append(
+                {
+                    "source": "issue_reference",
+                    "signal": f"references issue #{issue_num}",
+                    "weight": 0.2,
+                }
+            )
+
+    # Detect missing context
+    missing_context = []
+    suggestions = []
+
+    # Check message quality
+    if len(commit.message) < 20:
+        missing_context.append("short_commit_message")
+        suggestions.append("Commit message is very short - consider checking PR description")
+
+    generic_messages = ["fix", "wip", "update", "changes", "stuff", "tmp", "temp", "refactor"]
+    if commit.subject.strip().lower() in generic_messages:
+        missing_context.append("generic_commit_message")
+        suggestions.append("Generic commit message - look for linked PR/issue for context")
+
+    # Check for PR/issue references
+    if not commit.pr_number and not commit.issue_numbers:
+        missing_context.append("no_linked_pr_or_issue")
+        suggestions.append("No PR or issue reference - this may be a direct push")
+
+    # Check file changes
+    if not commit.files_changed or len(commit.files_changed) == 0:
+        missing_context.append("no_file_changes_analyzed")
+        suggestions.append("File diff not available - confidence based on message only")
+
     return {
         "success": True,
         "sha": commit.short_sha,
@@ -1218,6 +1321,9 @@ async def _explain_commit(repo_path: str, sha: str) -> dict[str, Any]:
         "issue_numbers": commit.issue_numbers,
         "author": commit.author.name,
         "date": commit.committed_date.isoformat(),
+        "evidence": evidence,
+        "missing_context": missing_context,
+        "suggestions": suggestions,
     }
 
 
@@ -2309,9 +2415,7 @@ async def _explain_file(owner: str, repo: str, path: str, include_content: bool)
                     {"name": s.qualified_name, "line": s.start_line, "signature": s.signature}
                     for s in symbols
                     if s.type.value in ("function", "method")
-                ][
-                    :20
-                ],  # Limit to 20
+                ][:20],  # Limit to 20
                 "total_symbols": len(symbols),
             }
         except ParserError:
@@ -2593,6 +2697,272 @@ async def _get_recent_activity(
             {"name": name, "commits": count}
             for name, count in sorted(by_author.items(), key=lambda x: x[1], reverse=True)
         ],
+    }
+
+
+async def _get_line_context(
+    owner: str,
+    repo: str,
+    file_path: str,
+    line_start: int,
+    line_end: int | None,
+    include_discussions: bool,
+) -> dict[str, Any]:
+    """Gather all context about why specific lines exist.
+
+    Aggregates: blame → commit → PR → issues → discussions.
+    Returns structured data for LLM reasoning (no interpretation).
+    """
+    line_end = line_end or line_start
+
+    result: dict[str, Any] = {
+        "file_path": file_path,
+        "line_range": [line_start, line_end],
+        "current_content": None,
+        "blame_commit": None,
+        "pull_request": None,
+        "linked_issues": [],
+        "context_availability": {
+            "available": [],
+            "missing": [],
+            "confidence_hint": "low",
+            "suggestions": [],
+        },
+    }
+
+    try:
+        client = GitHubClient(owner=owner, repo=repo, cache=_cache)
+
+        # 1. Get current file content
+        try:
+            file_data = await client.get_file_contents(file_path)
+            content = file_data.get("content", "")
+            lines = content.split("\n")
+            if line_start <= len(lines):
+                result["current_content"] = "\n".join(lines[line_start - 1 : line_end])
+        except Exception:
+            pass
+
+        # 2. Get commits for this file (proxy for blame)
+        commits = await client.list_commits(path=file_path, per_page=50)
+
+        if commits:
+            # Use most recent commit as blame (simplified - proper blame needs diff analysis)
+            blame_commit_data = commits[0]
+
+            result["blame_commit"] = {
+                "sha": blame_commit_data["sha"],
+                "message": blame_commit_data["message"],
+                "author": blame_commit_data["author"]["name"],
+                "date": blame_commit_data["author"]["date"],
+                "message_signals": _extract_message_signals(blame_commit_data["message"]),
+            }
+
+            # 3. Find PR for this commit
+            try:
+                prs = await client.search_prs_for_commit(blame_commit_data["sha"])
+
+                if prs and len(prs) > 0:
+                    pr = prs[0]
+                    # Handle both dict and object formats
+                    pr_number = pr["number"] if isinstance(pr, dict) else pr.number
+                    pr_detail = await client.get_pull_request(pr_number)
+
+                    result["pull_request"] = {
+                        "number": pr_number,
+                        "title": pr_detail.title,
+                        "body": pr_detail.body or "",
+                        "author": pr_detail.user.login if pr_detail.user else "",
+                        "state": pr_detail.state,
+                        "relevant_discussions": [],
+                        "review_summary": None,
+                    }
+
+                    # 4. Get PR discussions if requested
+                    if include_discussions:
+                        # Combine comments and review comments
+                        comments = await client.get_pr_comments(pr_number)
+                        review_comments = await client.get_pr_review_comments(pr_number)
+
+                        # Filter to relevant discussions
+                        all_comments = comments + review_comments
+                        relevant = _filter_relevant_discussions(all_comments)
+                        result["pull_request"]["relevant_discussions"] = relevant[:5]
+
+                        # Get review summary
+                        reviews = await client.get_pr_reviews(pr_number)
+                        result["pull_request"]["review_summary"] = _summarize_reviews(reviews)
+
+                    # 5. Find linked issues
+                    issue_refs = _extract_issue_references(
+                        pr_detail.body + " " + blame_commit_data["message"]
+                    )
+
+                    for issue_num in issue_refs[:3]:
+                        try:
+                            issue = await client.get_issue(issue_num)
+                            result["linked_issues"].append(
+                                {
+                                    "number": issue_num,
+                                    "title": issue.title,
+                                    "labels": [label.name for label in issue.labels],
+                                    "state": issue.state,
+                                }
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                # If PR search fails, continue without PR context
+                pass
+
+        # Compute context availability
+        result["context_availability"] = _compute_context_availability(result)
+
+    except Exception as e:
+        result["error"] = str(e)
+        result["context_availability"]["missing"].append("api_error")
+
+    return result
+
+
+def _extract_message_signals(message: str) -> list[str]:
+    """Extract signals from commit message."""
+    signals = []
+    message_lower = message.lower()
+
+    if any(word in message_lower for word in ["fix", "bug", "issue"]):
+        signals.append("contains_fix_keywords")
+    if any(word in message_lower for word in ["add", "feature", "implement"]):
+        signals.append("contains_feature_keywords")
+    if len(message) < 20:
+        signals.append("short_message")
+    if "\n\n" in message:
+        signals.append("has_detailed_body")
+
+    return signals
+
+
+def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
+    """Filter to discussions indicating decisions/alternatives."""
+    decision_keywords = [
+        "instead",
+        "alternative",
+        "could",
+        "should",
+        "consider",
+        "why",
+        "because",
+        "decided",
+        "chose",
+        "trade-off",
+    ]
+
+    relevant = []
+    for comment in comments:
+        body = (comment.get("body") or "").lower()
+        if any(kw in body for kw in decision_keywords):
+            relevant.append(
+                {
+                    "author": comment.get("user", {}).get("login", ""),
+                    "body": comment.get("body", "")[:500],
+                    "type": (
+                        "review_comment" if "pull_request_review_id" in comment else "pr_comment"
+                    ),
+                    "url": comment.get("html_url", ""),
+                }
+            )
+
+    return relevant
+
+
+def _extract_issue_references(text: str) -> list[int]:
+    """Extract issue numbers from text."""
+    import re
+
+    matches = re.findall(r"#(\d+)", text)
+    return [int(m) for m in matches]
+
+
+def _summarize_reviews(reviews: list) -> dict:
+    """Summarize PR reviews."""
+    approved_by = []
+    changes_requested_by = []
+
+    for review in reviews:
+        state = getattr(review, "state", "")
+        author = getattr(review.user, "login", "") if review.user else ""
+
+        if state == "APPROVED":
+            approved_by.append(author)
+        elif state == "CHANGES_REQUESTED":
+            changes_requested_by.append(author)
+
+    return {
+        "approved_by": list(set(approved_by)),
+        "changes_requested_by": list(set(changes_requested_by)),
+        "total_reviews": len(reviews),
+    }
+
+
+def _compute_context_availability(context: dict) -> dict:
+    """Compute what context is available vs missing."""
+    available = []
+    missing = []
+    suggestions = []
+
+    if context.get("current_content"):
+        available.append("file_content")
+
+    if context.get("blame_commit"):
+        commit = context["blame_commit"]
+        available.append("commit")
+
+        if "has_detailed_body" in commit.get("message_signals", []):
+            available.append("detailed_commit_message")
+        if "short_message" in commit.get("message_signals", []):
+            missing.append("meaningful_commit_message")
+            suggestions.append("Commit message is generic - context may be limited")
+    else:
+        missing.append("blame_commit")
+
+    if context.get("pull_request"):
+        pr = context["pull_request"]
+        available.append("pull_request")
+
+        if pr.get("body"):
+            available.append("pr_description")
+        else:
+            missing.append("pr_description")
+
+        if pr.get("relevant_discussions"):
+            available.append("pr_discussions")
+        else:
+            missing.append("pr_discussions")
+    else:
+        missing.append("pull_request")
+        suggestions.append("No PR found - commit may have been pushed directly")
+
+    if context.get("linked_issues"):
+        available.append("linked_issues")
+    else:
+        missing.append("linked_issues")
+
+    # Compute confidence
+    confidence_score = len(available) - len(missing)
+    if confidence_score >= 5:
+        confidence = "high"
+    elif confidence_score >= 2:
+        confidence = "medium"
+    elif confidence_score >= 0:
+        confidence = "low"
+    else:
+        confidence = "very_low"
+
+    return {
+        "available": available,
+        "missing": missing,
+        "confidence_hint": confidence,
+        "suggestions": suggestions,
     }
 
 
