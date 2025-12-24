@@ -545,6 +545,68 @@ class GitHubClient:
 
         return result
 
+    async def get_commits_batch(self, shas: list[str]) -> dict[str, dict]:
+        """Get multiple commits at once (batch operation).
+
+        This is much more efficient than calling get_commit() multiple times
+        because it:
+        1. Checks cache for all commits first
+        2. Fetches only missing commits in parallel
+        3. Returns all results in a single response
+
+        Args:
+            shas: List of commit SHAs to fetch.
+
+        Returns:
+            Dictionary mapping SHA -> commit details.
+            Missing/invalid commits will not be in the result.
+
+        Example:
+            >>> commits = await client.get_commits_batch(["abc123", "def456", "ghi789"])
+            >>> print(commits["abc123"]["message"])
+        """
+        import asyncio
+
+        if not shas:
+            return {}
+
+        # Remove duplicates while preserving order
+        unique_shas = list(dict.fromkeys(shas))
+
+        results = {}
+        to_fetch = []
+
+        # Check cache for all commits first
+        for sha in unique_shas:
+            cached = self._cache_get("github:get_commit", sha)
+            if cached is not None:
+                results[sha] = cached
+            else:
+                to_fetch.append(sha)
+
+        # Fetch missing commits in parallel
+        if to_fetch:
+
+            async def fetch_one(sha: str) -> tuple[str, dict | None]:
+                """Fetch a single commit and return (sha, data) tuple."""
+                try:
+                    # Call get_commit which handles caching
+                    data = await self.get_commit(sha)
+                    return (sha, data)
+                except Exception:
+                    # If commit doesn't exist or API error, return None
+                    return (sha, None)
+
+            # Fetch all in parallel
+            fetch_results = await asyncio.gather(*[fetch_one(sha) for sha in to_fetch])
+
+            # Add successful fetches to results
+            for sha, data in fetch_results:
+                if data is not None:
+                    results[sha] = data
+
+        return results
+
     async def list_commits(
         self,
         path: str | None = None,

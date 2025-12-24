@@ -252,6 +252,29 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_github_commits_batch",
+            description="Get details of multiple commits at once from any GitHub repository. Much more efficient than calling get_github_commit multiple times. Fetches missing commits in parallel and uses caching.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "shas": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of commit SHAs to fetch",
+                    },
+                },
+                "required": ["owner", "repo", "shas"],
+            },
+        ),
+        Tool(
             name="get_github_file_history",
             description="Get the commit history for a specific file from any GitHub repository without cloning.",
             inputSchema={
@@ -792,6 +815,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Fetch PR/issue comments for richer context (slower but more complete)",
                         "default": True,
                     },
+                    "history_depth": {
+                        "type": "integer",
+                        "description": "Number of historical commits to analyze (default: 1 for just blame, 5-10 recommended for finding when code was introduced)",
+                        "default": 1,
+                    },
                 },
                 "required": ["owner", "repo", "file_path", "line_start"],
             },
@@ -847,6 +875,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "get_github_commit":
             result = await _get_github_commit(
                 arguments["owner"], arguments["repo"], arguments["sha"]
+            )
+        elif name == "get_github_commits_batch":
+            result = await _get_github_commits_batch(
+                arguments["owner"], arguments["repo"], arguments["shas"]
             )
         elif name == "get_github_file_history":
             result = await _get_github_file_history(
@@ -982,6 +1014,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["line_start"],
                 arguments.get("line_end"),
                 arguments.get("include_discussions", True),
+                arguments.get("history_depth", 1),
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
@@ -1432,6 +1465,72 @@ async def _get_github_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
         "html_url": commit["html_url"],
         "total_files": len(commit.get("files", [])),
         "files": files_summary,
+    }
+
+
+async def _get_github_commits_batch(
+    owner: str, repo: str, shas: list[str]
+) -> dict[str, Any]:
+    """Get multiple GitHub commits at once (batch operation).
+
+    This is much more efficient than calling _get_github_commit multiple times.
+    Uses caching and fetches missing commits in parallel.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        shas: List of commit SHAs to fetch
+
+    Returns:
+        Dictionary with:
+        - success: True/False
+        - commits: Dictionary mapping SHA -> commit details
+        - total_requested: Number of SHAs requested
+        - total_found: Number of commits successfully retrieved
+        - missing_shas: List of SHAs that couldn't be found
+    """
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
+
+    # Fetch all commits in batch
+    commits_dict = await client.get_commits_batch(shas)
+
+    # Format each commit (similar to _get_github_commit)
+    formatted_commits = {}
+    for sha, commit in commits_dict.items():
+        # Remove patch data to reduce token usage
+        files_summary = [
+            {
+                "path": f["path"],
+                "status": f["status"],
+                "additions": f["additions"],
+                "deletions": f["deletions"],
+            }
+            for f in commit.get("files", [])[:20]
+        ]
+
+        formatted_commits[sha] = {
+            "sha": commit["sha"],
+            "message": _truncate(commit["message"], 500),
+            "author": commit["author"],
+            "committer": commit["committer"],
+            "parents": commit["parents"],
+            "stats": commit["stats"],
+            "html_url": commit["html_url"],
+            "total_files": len(commit.get("files", [])),
+            "files": files_summary,
+        }
+
+    # Identify missing SHAs
+    missing_shas = [sha for sha in shas if sha not in commits_dict]
+
+    return {
+        "success": True,
+        "owner": owner,
+        "repo": repo,
+        "commits": formatted_commits,
+        "total_requested": len(shas),
+        "total_found": len(formatted_commits),
+        "missing_shas": missing_shas,
     }
 
 
@@ -2707,11 +2806,18 @@ async def _get_line_context(
     line_start: int,
     line_end: int | None,
     include_discussions: bool,
+    history_depth: int = 1,
 ) -> dict[str, Any]:
     """Gather all context about why specific lines exist.
 
     Aggregates: blame → commit → PR → issues → discussions.
     Returns structured data for LLM reasoning (no interpretation).
+
+    Args:
+        history_depth: Number of historical commits to analyze (default: 1).
+            - 1: Just the most recent commit (fast, but might miss original introduction)
+            - 5-10: Analyze recent history to find when code was actually added (recommended)
+            - Higher values help find original context when recent commits only modified surrounding code
     """
     line_end = line_end or line_start
 
@@ -2720,6 +2826,7 @@ async def _get_line_context(
         "line_range": [line_start, line_end],
         "current_content": None,
         "blame_commit": None,
+        "historical_commits": [],  # NEW: Multiple commits if history_depth > 1
         "pull_request": None,
         "linked_issues": [],
         "context_availability": {
@@ -2744,7 +2851,9 @@ async def _get_line_context(
             pass
 
         # 2. Get commits for this file (proxy for blame)
-        commits = await client.list_commits(path=file_path, per_page=50)
+        # Fetch more commits if history_depth > 1
+        fetch_count = max(50, history_depth * 10)  # Fetch more to have options
+        commits = await client.list_commits(path=file_path, per_page=fetch_count)
 
         if commits:
             # Use most recent commit as blame (simplified - proper blame needs diff analysis)
@@ -2757,6 +2866,30 @@ async def _get_line_context(
                 "date": blame_commit_data["author"]["date"],
                 "message_signals": _extract_message_signals(blame_commit_data["message"]),
             }
+
+            # 2b. If history_depth > 1, fetch historical commits in batch
+            if history_depth > 1 and len(commits) > 1:
+                # Get SHAs for historical commits (skip first one, already have it)
+                historical_shas = [c["sha"] for c in commits[1 : min(history_depth, len(commits))]]
+
+                if historical_shas:
+                    # Use batch operation for speed
+                    historical_commits_dict = await client.get_commits_batch(historical_shas)
+
+                    # Convert to list with metadata
+                    for sha in historical_shas:
+                        if sha in historical_commits_dict:
+                            commit = historical_commits_dict[sha]
+                            result["historical_commits"].append(
+                                {
+                                    "sha": sha,
+                                    "message": _truncate(commit["message"], 300),
+                                    "author": commit["author"]["name"],
+                                    "date": commit["author"]["date"],
+                                    "message_signals": _extract_message_signals(commit["message"]),
+                                    "stats": commit["stats"],
+                                }
+                            )
 
             # 3. Find PR for this commit
             try:
@@ -2924,6 +3057,13 @@ def _compute_context_availability(context: dict) -> dict:
             suggestions.append("Commit message is generic - context may be limited")
     else:
         missing.append("blame_commit")
+
+    # Check for historical commits
+    if context.get("historical_commits") and len(context["historical_commits"]) > 0:
+        available.append("historical_commits")
+        suggestions.append(
+            f"Found {len(context['historical_commits'])} historical commits for deeper context"
+        )
 
     if context.get("pull_request"):
         pr = context["pull_request"]
