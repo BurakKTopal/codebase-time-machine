@@ -5,6 +5,13 @@ import * as path from 'path';
 export interface GitHubRepoInfo {
     owner: string;
     repo: string;
+    rootPath: string;
+}
+
+export function getRelativePath(absolutePath: string, rootPath: string): string {
+    const relative = path.relative(rootPath, absolutePath);
+    // Convert Windows backslashes to forward slashes for GitHub
+    return relative.replace(/\\/g, '/');
 }
 
 export async function detectGitHubRepo(): Promise<GitHubRepoInfo> {
@@ -47,7 +54,8 @@ export async function detectGitHubRepo(): Promise<GitHubRepoInfo> {
 
         return {
             owner: githubMatch[1],
-            repo: githubMatch[2]
+            repo: githubMatch[2],
+            rootPath: rootPath
         };
     } catch (error) {
         if (error instanceof Error) {

@@ -135,51 +135,51 @@ export class ContextPanel {
     </style>
 </head>
 <body>
-    <h1>🕰️ Why does this code exist?</h1>
+    <h1>Code Context</h1>
 
     <div class="summary">
         ${htmlSummary}
     </div>
 
     <div class="section">
-        <h2>📍 Location</h2>
+        <h2>Location</h2>
         <p><strong>File:</strong> <code>${context.file_path}</code></p>
-        <p><strong>Lines:</strong> ${context.line_start}-${context.line_end}</p>
+        <p><strong>Lines:</strong> ${context.line_range || `${context.line_start || '?'}-${context.line_end || '?'}`}</p>
     </div>
 
-    ${context.last_commit ? `
+    ${context.blame_commit ? `
     <div class="section commit">
-        <h2>📝 Last Modified</h2>
-        <p><strong>Commit:</strong> <code>${context.last_commit.sha ? context.last_commit.sha.slice(0, 7) : 'unknown'}</code></p>
-        <p><strong>Author:</strong> ${this.escapeHtml(context.last_commit.author || 'unknown')}</p>
-        <p><strong>Date:</strong> ${context.last_commit.date || 'unknown'}</p>
-        <p><strong>Message:</strong> ${this.escapeHtml(context.last_commit.message || '')}</p>
+        <h2>Last Modified</h2>
+        <p><strong>Commit:</strong> <code>${context.blame_commit.sha ? context.blame_commit.sha.slice(0, 7) : 'unknown'}</code></p>
+        <p><strong>Author:</strong> ${this.escapeHtml(context.blame_commit.author || 'unknown')}</p>
+        <p><strong>Date:</strong> ${context.blame_commit.date || 'unknown'}</p>
+        <p><strong>Message:</strong> ${this.escapeHtml(context.blame_commit.message || '')}</p>
     </div>
     ` : ''}
 
-    ${context.pr ? `
+    ${context.pull_request ? `
     <div class="section pr">
-        <h2>🔗 Pull Request #${context.pr.number}</h2>
-        <p><strong>${this.escapeHtml(context.pr.title)}</strong></p>
-        ${context.pr.body ? `<p>${this.escapeHtml(context.pr.body.slice(0, 300))}${context.pr.body.length > 300 ? '...' : ''}</p>` : ''}
-        ${context.pr.html_url ? `<p><a href="${context.pr.html_url}">View on GitHub →</a></p>` : ''}
-        <p class="metadata">Merged: ${context.pr.merged_at ? new Date(context.pr.merged_at).toLocaleDateString() : 'Not merged'}</p>
+        <h2>Pull Request #${context.pull_request.number}</h2>
+        <p><strong>${this.escapeHtml(context.pull_request.title)}</strong></p>
+        ${context.pull_request.body ? `<p>${this.escapeHtml(context.pull_request.body.slice(0, 300))}${context.pull_request.body.length > 300 ? '...' : ''}</p>` : ''}
+        ${context.pull_request.html_url ? `<p><a href="${context.pull_request.html_url}">View on GitHub</a></p>` : ''}
+        <p class="metadata">Merged: ${context.pull_request.merged_at ? new Date(context.pull_request.merged_at).toLocaleDateString() : 'Not merged'}</p>
     </div>
     ` : ''}
 
-    ${context.issue ? `
+    ${context.linked_issues && context.linked_issues.length > 0 ? context.linked_issues.map((issue: any) => `
     <div class="section issue">
-        <h2>📋 Issue #${context.issue.number}</h2>
-        <p><strong>${this.escapeHtml(context.issue.title)}</strong></p>
-        ${context.issue.body ? `<p>${this.escapeHtml(context.issue.body.slice(0, 300))}${context.issue.body.length > 300 ? '...' : ''}</p>` : ''}
-        ${context.issue.html_url ? `<p><a href="${context.issue.html_url}">View on GitHub →</a></p>` : ''}
-        <p class="metadata">State: ${context.issue.state || 'unknown'}</p>
+        <h2>Issue #${issue.number}</h2>
+        <p><strong>${this.escapeHtml(issue.title)}</strong></p>
+        ${issue.body ? `<p>${this.escapeHtml(issue.body.slice(0, 300))}${issue.body.length > 300 ? '...' : ''}</p>` : ''}
+        ${issue.html_url ? `<p><a href="${issue.html_url}">View on GitHub</a></p>` : ''}
+        <p class="metadata">State: ${issue.state || 'unknown'}</p>
     </div>
-    ` : ''}
+    `).join('') : ''}
 
     ${context.discussions && context.discussions.length > 0 ? `
     <div class="section">
-        <h2>💬 Key Discussions</h2>
+        <h2>Key Discussions</h2>
         ${context.discussions.slice(0, 3).map((d: any) => `
             <blockquote>
                 <p>${this.escapeHtml(d.body ? d.body.slice(0, 200) : '')}${d.body && d.body.length > 200 ? '...' : ''}</p>
@@ -189,9 +189,9 @@ export class ContextPanel {
     </div>
     ` : ''}
 
-    ${!context.pr && !context.issue ? `
+    ${!context.pull_request && (!context.linked_issues || context.linked_issues.length === 0) ? `
     <div class="info">
-        <p><strong>ℹ️ Limited Context</strong></p>
+        <p><strong>Note:</strong> Limited Context</p>
         <p>This code doesn't have linked PRs or issues. The context is based on Git history only.</p>
     </div>
     ` : ''}

@@ -222,6 +222,10 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of historical commits to analyze (default: 1). Use 5-10 to find when code was originally added.",
                     },
+                    "ref": {
+                        "type": "string",
+                        "description": "Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD (current branch).",
+                    },
                 },
                 "required": ["repo_path", "file_path", "line_start"],
             },
@@ -854,6 +858,10 @@ async def list_tools() -> list[Tool]:
                         "description": "Number of historical commits to analyze (default: 1 for just blame, 5-10 recommended for finding when code was introduced)",
                         "default": 1,
                     },
+                    "ref": {
+                        "type": "string",
+                        "description": "Git ref (branch, tag, or SHA) to analyze. Defaults to the repository's default branch (usually main or master).",
+                    },
                 },
                 "required": ["owner", "repo", "file_path", "line_start"],
             },
@@ -909,6 +917,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("line_end"),
                 arguments.get("include_discussions", True),
                 arguments.get("history_depth", 1),
+                arguments.get("ref"),  # Branch/tag/SHA to analyze
             )
         # GitHub API tools
         elif name == "get_github_repo":
@@ -1058,6 +1067,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("line_end"),
                 arguments.get("include_discussions", True),
                 arguments.get("history_depth", 1),
+                arguments.get("ref"),  # Branch/tag/SHA to analyze
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
@@ -1457,16 +1467,24 @@ async def _get_local_line_context(
     line_end: int | None = None,
     include_discussions: bool = True,
     history_depth: int = 1,
+    ref: str | None = None,
 ) -> dict[str, Any]:
     """Get line context for local repo (bridges to GitHub if remote exists).
 
     If local repo has GitHub remote, uses full get_line_context capabilities.
     Otherwise falls back to basic blame.
+
+    Args:
+        ref: Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD.
     """
     from ctm_mcp_server.utils import detect_github_remote
 
     repo = GitRepo(repo_path)
     github_info = detect_github_remote(repo)
+
+    # If no ref specified, use current branch
+    if ref is None:
+        ref = repo.current_branch or "HEAD"
 
     if github_info:
         # Local repo has GitHub remote - use full context chain
@@ -1479,9 +1497,11 @@ async def _get_local_line_context(
             line_end=line_end or line_start,
             include_discussions=include_discussions,
             history_depth=history_depth,
+            ref=ref,  # Pass the branch to GitHub API
         )
         result["source"] = "github_remote"
         result["remote_url"] = f"https://github.com/{owner}/{repo_name}"
+        result["ref"] = ref
         return result
     else:
         # No GitHub remote - fall back to basic blame
@@ -2899,6 +2919,7 @@ async def _get_line_context(
     line_end: int | None,
     include_discussions: bool,
     history_depth: int = 1,
+    ref: str | None = None,
 ) -> dict[str, Any]:
     """Gather all context about why specific lines exist.
 
@@ -2910,8 +2931,10 @@ async def _get_line_context(
             - 1: Just the most recent commit (fast, but might miss original introduction)
             - 5-10: Analyze recent history to find when code was actually added (recommended)
             - Higher values help find original context when recent commits only modified surrounding code
+        ref: Git ref (branch, tag, or SHA) to analyze. Defaults to default branch.
     """
     line_end = line_end or line_start
+    ref = ref or None  # Use None to get default branch from GitHub API
 
     result: dict[str, Any] = {
         "file_path": file_path,
@@ -2934,7 +2957,7 @@ async def _get_line_context(
 
         # 1. Get current file content
         try:
-            file_data = await client.get_file_contents(file_path)
+            file_data = await client.get_file_contents(file_path, ref=ref)
             content = file_data.get("content", "")
             lines = content.split("\n")
             if line_start <= len(lines):
@@ -2945,7 +2968,7 @@ async def _get_line_context(
         # 2. Get commits for this file (proxy for blame)
         # Fetch more commits if history_depth > 1
         fetch_count = max(50, history_depth * 10)  # Fetch more to have options
-        commits = await client.list_commits(path=file_path, per_page=fetch_count)
+        commits = await client.list_commits(path=file_path, per_page=fetch_count, sha=ref)
 
         if commits:
             # Use most recent commit as blame (simplified - proper blame needs diff analysis)

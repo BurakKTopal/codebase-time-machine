@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { MCPClient } from './mcpClient';
-import { LLMClient } from './llmClient';
+import { CTMAgent } from './agent';
 import { ContextPanel } from './ui/contextPanel';
-import { detectGitHubRepo } from './utils/github';
+import { detectGitHubRepo, getRelativePath } from './utils/github';
 
 let mcpClient: MCPClient | null = null;
 
@@ -31,17 +31,41 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise<void> {
+    console.log('[CTM] ========== Starting Code Context Analysis ==========');
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
+        console.log('[CTM] ERROR: No active editor');
         vscode.window.showErrorMessage('No active editor');
         return;
     }
 
     const selection = editor.selection;
     if (selection.isEmpty) {
+        console.log('[CTM] WARNING: No code selected');
         vscode.window.showWarningMessage('Please select some code first');
         return;
     }
+
+    // Calculate line numbers (1-indexed)
+    // VS Code's selection is 0-indexed
+    const startLine = selection.start.line + 1;
+
+    // If selection ends at the beginning of a line (column 0), don't include that line
+    // This happens when you select full lines - the cursor ends at the start of the next line
+    let endLine = selection.end.line + 1;
+    if (selection.end.character === 0 && selection.end.line > selection.start.line) {
+        endLine = selection.end.line; // Don't add 1, use the previous line
+    }
+
+    console.log('[CTM] Selected lines:', startLine, '-', endLine);
+    console.log('[CTM] Selection details:', {
+        start: { line: selection.start.line, char: selection.start.character },
+        end: { line: selection.end.line, char: selection.end.character }
+    });
+
+    const selectedText = editor.document.getText(selection);
+    console.log('[CTM] Selected text:');
+    console.log(selectedText);
 
     try {
         // Show progress
@@ -52,19 +76,65 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
         }, async (progress) => {
             // Step 1: Detect GitHub repo
             progress.report({ increment: 10, message: "Detecting repository..." });
+            console.log('[CTM] Step 1: Detecting GitHub repository');
             let repoInfo;
             try {
                 repoInfo = await detectGitHubRepo();
+                console.log('[CTM] Repository detected:', repoInfo.owner + '/' + repoInfo.repo);
             } catch (error) {
+                console.log('[CTM] ERROR: Cannot detect GitHub repo:', error);
                 throw new Error(`Cannot detect GitHub repo: ${error instanceof Error ? error.message : String(error)}`);
             }
 
-            // Step 2: Get file path relative to workspace
+            // Step 2: Get file path relative to git root
             progress.report({ increment: 20, message: "Getting file path..." });
-            const filePath = vscode.workspace.asRelativePath(editor.document.fileName);
+            const filePath = getRelativePath(editor.document.fileName, repoInfo.rootPath);
+            console.log('[CTM] Step 2: File path (relative to git root):', filePath);
+
+            // Step 2.5: Check for uncommitted changes
+            progress.report({ increment: 25, message: "Checking for uncommitted changes..." });
+            console.log('[CTM] Step 2.5: Checking if file has uncommitted changes');
+            const { exec } = require('child_process');
+            const { promisify } = require('util');
+            const execAsync = promisify(exec);
+
+            let hasUncommittedChanges = false;
+            try {
+                const { stdout } = await execAsync(`git diff HEAD -- "${filePath}"`, { cwd: repoInfo.rootPath });
+                hasUncommittedChanges = stdout.trim().length > 0;
+                console.log('[CTM] File has uncommitted changes:', hasUncommittedChanges);
+
+                if (hasUncommittedChanges) {
+                    console.log('[CTM] WARNING: File has uncommitted changes. Line numbers may not match git history.');
+                    const answer = await vscode.window.showWarningMessage(
+                        'This file has uncommitted changes. Git blame will show the last committed version, which may have different line numbers. Do you want to continue?',
+                        'Continue Anyway',
+                        'Cancel'
+                    );
+                    if (answer !== 'Continue Anyway') {
+                        console.log('[CTM] User cancelled due to uncommitted changes');
+                        return;
+                    }
+                }
+            } catch (error) {
+                console.log('[CTM] Could not check for uncommitted changes:', error);
+                // Continue anyway - this is not a critical error
+            }
+
+            // Step 2.6: Detect current branch
+            let currentBranch = 'unknown';
+            try {
+                const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: repoInfo.rootPath });
+                currentBranch = stdout.trim();
+                console.log('[CTM] Current branch:', currentBranch);
+                console.log('[CTM] NOTE: Analysis will be based on the history of this branch');
+            } catch (error) {
+                console.log('[CTM] Could not detect current branch:', error);
+            }
 
             // Step 3: Connect to MCP server
             progress.report({ increment: 30, message: "Connecting to CTM server..." });
+            console.log('[CTM] Step 3: Connecting to MCP server');
             if (!mcpClient) {
                 throw new Error('MCP client not initialized');
             }
@@ -72,43 +142,62 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
             if (!mcpClient.isConnected()) {
                 try {
                     await mcpClient.connect();
+                    console.log('[CTM] MCP server connection established');
                 } catch (error) {
+                    console.log('[CTM] ERROR: Failed to connect to MCP server:', error);
                     throw new Error(`Failed to start CTM server. Make sure 'uv' is installed and CTM is set up. Error: ${error instanceof Error ? error.message : String(error)}`);
                 }
+            } else {
+                console.log('[CTM] Already connected to MCP server (reusing connection)');
             }
 
-            // Step 4: Get context from MCP server
-            progress.report({ increment: 40, message: "Fetching context from MCP server..." });
+            // Step 4: Get API key
+            progress.report({ increment: 40, message: "Checking configuration..." });
+            console.log('[CTM] Step 4: Getting Anthropic API key');
+            const config = vscode.workspace.getConfiguration('ctm');
+            const apiKey = config.get<string>('anthropicApiKey', '');
+            if (!apiKey) {
+                throw new Error('Anthropic API key not configured. Please set it in VS Code settings (ctm.anthropicApiKey)');
+            }
+
+            // Step 5: Run agent investigation
+            progress.report({ increment: 50, message: "Starting agent investigation..." });
+            console.log('[CTM] Step 5: Launching CTM agent');
+            const agent = new CTMAgent(mcpClient, {
+                apiKey: apiKey,
+                owner: repoInfo.owner,
+                repo: repoInfo.repo,
+                repoPath: repoInfo.rootPath,
+                filePath: filePath,
+                lineStart: startLine,
+                lineEnd: endLine,
+                branch: currentBranch
+            });
+
+            let summary;
             let rawContext;
             try {
-                rawContext = await mcpClient.getLineContext({
-                    owner: repoInfo.owner,
-                    repo: repoInfo.repo,
-                    file_path: filePath,
-                    line_start: selection.start.line + 1,
-                    line_end: selection.end.line + 1
-                });
+                const result = await agent.investigate();
+                summary = result.summary;
+                rawContext = result.rawContext;
+                console.log('[CTM] Agent investigation complete');
+                console.log('[CTM] Summary length:', summary.length, 'characters');
+                console.groupCollapsed('[CTM] 📦 Collected Context (click to expand)');
+                console.log(JSON.stringify(rawContext, null, 2));
+                console.groupEnd();
             } catch (error) {
-                throw new Error(`Failed to get context: ${error instanceof Error ? error.message : String(error)}`);
-            }
-
-            // Step 5: Summarize with LLM
-            progress.report({ increment: 50, message: "Generating AI summary..." });
-            const llmClient = new LLMClient();
-            let summary;
-            try {
-                summary = await llmClient.summarize(rawContext);
-            } catch (error) {
-                console.error('Error summarizing with LLM:', error);
-                summary = 'Error generating summary. See raw context below.';
+                console.error('[CTM] ERROR: Agent investigation failed:', error);
+                throw new Error(`Agent investigation failed: ${error instanceof Error ? error.message : String(error)}`);
             }
 
             // Step 6: Show in panel
             progress.report({ increment: 90, message: "Displaying results..." });
+            console.log('[CTM] Step 6: Displaying results in panel');
             const panel = new ContextPanel();
             panel.show(summary, rawContext, context.extensionUri);
 
             progress.report({ increment: 100, message: "Done!" });
+            console.log('[CTM] ========== Analysis Complete ==========');
         });
 
     } catch (error) {

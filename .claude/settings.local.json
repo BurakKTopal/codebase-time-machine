@@ -30,7 +30,11 @@
       "Bash(node --version)",
       "Bash(npm --version)",
       "Bash(npm run compile:*)",
-      "Bash(npm run package:*)"
+      "Bash(npm run package:*)",
+      "Bash(code --uninstall-extension:*)",
+      "Bash(code --install-extension:*)",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

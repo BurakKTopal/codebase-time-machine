@@ -25,6 +25,8 @@ export class MCPClient {
             let serverCommand = config.get<string>('serverCommand', 'uv');
             let serverArgs = config.get<string[]>('serverArgs', ['run', 'ctm-server']);
             const serverPath = config.get<string>('serverPath', '');
+            const githubToken = config.get<string>('githubToken', '');
+            const showServerWindow = config.get<boolean>('showServerWindow', false);
             let workingDirectory: string | undefined;
 
             // Determine working directory
@@ -56,13 +58,42 @@ export class MCPClient {
 
                 const isWindows = process.platform === 'win32';
                 if (isWindows) {
-                    const batchFile = path.join(tmpDir, 'ctm-start.bat');
-                    const batchContent = `@echo off\ncd /d "${workingDirectory}"\n${serverCommand} ${serverArgs.join(' ')}`;
-                    fs.writeFileSync(batchFile, batchContent);
+                    // Create a Node.js wrapper that spawns with windowsHide (unless user wants to see it)
+                    const wrapperFile = path.join(tmpDir, 'ctm-wrapper.js');
+                    const wrapperContent = `const { spawn } = require('child_process');
 
-                    // Windows .bat files must be executed through cmd
-                    serverCommand = 'cmd';
-                    serverArgs = ['/c', batchFile];
+// Show startup banner
+console.log('='.repeat(60));
+console.log('Codebase Time Machine - MCP Server');
+console.log('='.repeat(60));
+console.log('Server starting...');
+console.log('Working directory: ${workingDirectory.replace(/\\/g, '\\\\')}');
+console.log('Command: ${serverCommand} ${serverArgs.join(' ')}');
+console.log('');
+console.log('This server provides code context analysis via MCP protocol.');
+console.log('It will stay running in the background to serve VS Code requests.');
+console.log('');
+console.log('You can close this window to hide it (server keeps running).');
+console.log('The server will stop when you close VS Code.');
+console.log('='.repeat(60));
+console.log('');
+
+const proc = spawn('${serverCommand}', ${JSON.stringify(serverArgs)}, {
+    cwd: '${workingDirectory.replace(/\\/g, '\\\\')}',
+    stdio: 'inherit',
+    windowsHide: ${!showServerWindow}
+});
+
+proc.on('exit', code => {
+    console.log('');
+    console.log('MCP Server stopped (exit code: ' + code + ')');
+    process.exit(code);
+});`;
+                    fs.writeFileSync(wrapperFile, wrapperContent);
+
+                    // Run the wrapper with node
+                    serverCommand = 'node';
+                    serverArgs = [wrapperFile];
                 } else {
                     const scriptFile = path.join(tmpDir, 'ctm-start.sh');
                     const scriptContent = `#!/bin/sh\ncd "${workingDirectory}"\n${serverCommand} ${serverArgs.join(' ')}`;
@@ -73,15 +104,26 @@ export class MCPClient {
                 }
             }
 
+            // Build environment with GitHub token
+            const env = { ...process.env } as Record<string, string>;
+            if (githubToken) {
+                env['GITHUB_TOKEN'] = githubToken;
+                console.log('[CTM] GitHub token configured - private repos and higher rate limits enabled');
+            }
+
             // Log the exact command being executed
             console.log('[CTM] Starting MCP server with command:', serverCommand);
             console.log('[CTM] Arguments:', serverArgs);
             console.log('[CTM] Full command:', `${serverCommand} ${serverArgs.join(' ')}`);
+            console.log('[CTM] Server window visibility:', showServerWindow ? 'VISIBLE (for debugging)' : 'HIDDEN (background)');
+            if (workingDirectory) {
+                console.log('[CTM] Working directory:', workingDirectory);
+            }
 
             this.transport = new StdioClientTransport({
                 command: serverCommand,
                 args: serverArgs,
-                env: process.env as Record<string, string>
+                env: env
             });
 
             this.client = new Client({
@@ -101,15 +143,28 @@ export class MCPClient {
         }
     }
 
-    async getLineContext(params: GetLineContextParams): Promise<any> {
+    async listTools(): Promise<any[]> {
+        if (!this.client || !this.connected) {
+            throw new Error('MCP client not connected. Call connect() first.');
+        }
+
+        try {
+            const result = await this.client.listTools();
+            return result.tools || [];
+        } catch (error) {
+            throw new Error(`Failed to list tools: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    async callTool(name: string, args: any): Promise<any> {
         if (!this.client || !this.connected) {
             throw new Error('MCP client not connected. Call connect() first.');
         }
 
         try {
             const result = await this.client.callTool({
-                name: 'get_line_context',
-                arguments: params as Record<string, unknown>
+                name: name,
+                arguments: args as Record<string, unknown>
             });
 
             if (!result.content || (Array.isArray(result.content) && result.content.length === 0)) {
@@ -123,10 +178,21 @@ export class MCPClient {
                 throw new Error('Expected text content from MCP server');
             }
 
-            return JSON.parse(textContent.text);
+            // Try to parse as JSON
+            try {
+                return JSON.parse(textContent.text);
+            } catch (parseError) {
+                // If it's not JSON, it might be an error message from the MCP server
+                console.error('[CTM] Tool returned non-JSON response:', textContent.text);
+                throw new Error(`Tool ${name} returned invalid response: ${textContent.text}`);
+            }
         } catch (error) {
-            throw new Error(`Failed to get line context: ${error instanceof Error ? error.message : String(error)}`);
+            throw new Error(`Failed to call tool ${name}: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    async getLineContext(params: GetLineContextParams): Promise<any> {
+        return this.callTool('get_line_context', params);
     }
 
     async disconnect(): Promise<void> {

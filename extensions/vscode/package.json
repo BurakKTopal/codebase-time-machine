@@ -48,6 +48,16 @@
           "type": "string",
           "description": "Working directory for CTM server (path to CTM repository). Leave empty to auto-detect.",
           "default": ""
+        },
+        "ctm.githubToken": {
+          "type": "string",
+          "description": "GitHub Personal Access Token for private repositories and higher rate limits (get one at https://github.com/settings/tokens)",
+          "default": ""
+        },
+        "ctm.showServerWindow": {
+          "type": "boolean",
+          "description": "Show the MCP server console window (useful for debugging)",
+          "default": false
         }
       }
     }
@@ -57,18 +67,25 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
+    "test": "mocha --require tsx --require src/test/setup.ts --extensions ts src/**/*.test.ts",
     "package": "vsce package"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.5.0",
-    "@anthropic-ai/sdk": "^0.20.0"
+    "@anthropic-ai/sdk": "^0.32.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.80.0",
+    "@types/mocha": "^10.0.0",
+    "@types/sinon": "^17.0.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
+    "cross-env": "^7.0.3",
     "eslint": "^8.0.0",
+    "mocha": "^10.0.0",
+    "sinon": "^17.0.0",
+    "tsx": "^4.7.0",
     "typescript": "^5.0.0",
     "@vscode/vsce": "^2.0.0"
   }
