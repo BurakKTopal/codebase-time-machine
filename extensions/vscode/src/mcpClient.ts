@@ -22,8 +22,61 @@ export class MCPClient {
 
         try {
             const config = vscode.workspace.getConfiguration('ctm');
-            const serverCommand = config.get<string>('serverCommand', 'uv');
-            const serverArgs = config.get<string[]>('serverArgs', ['run', 'ctm-server']);
+            let serverCommand = config.get<string>('serverCommand', 'uv');
+            let serverArgs = config.get<string[]>('serverArgs', ['run', 'ctm-server']);
+            const serverPath = config.get<string>('serverPath', '');
+            let workingDirectory: string | undefined;
+
+            // Determine working directory
+            if (serverPath) {
+                workingDirectory = serverPath;
+            } else {
+                // Auto-detect: Check if current workspace is CTM repo
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders) {
+                    const rootPath = workspaceFolders[0].uri.fsPath;
+                    const path = require('path');
+                    const fs = require('fs');
+                    const pyprojectPath = path.join(rootPath, 'pyproject.toml');
+                    if (fs.existsSync(pyprojectPath)) {
+                        const pyproject = fs.readFileSync(pyprojectPath, 'utf-8');
+                        if (pyproject.includes('ctm-server')) {
+                            workingDirectory = rootPath;
+                        }
+                    }
+                }
+            }
+
+            // If we have a working directory, create a batch file to handle it
+            if (workingDirectory) {
+                const path = require('path');
+                const fs = require('fs');
+                const os = require('os');
+                const tmpDir = os.tmpdir();
+
+                const isWindows = process.platform === 'win32';
+                if (isWindows) {
+                    const batchFile = path.join(tmpDir, 'ctm-start.bat');
+                    const batchContent = `@echo off\ncd /d "${workingDirectory}"\n${serverCommand} ${serverArgs.join(' ')}`;
+                    fs.writeFileSync(batchFile, batchContent);
+
+                    // Windows .bat files must be executed through cmd
+                    serverCommand = 'cmd';
+                    serverArgs = ['/c', batchFile];
+                } else {
+                    const scriptFile = path.join(tmpDir, 'ctm-start.sh');
+                    const scriptContent = `#!/bin/sh\ncd "${workingDirectory}"\n${serverCommand} ${serverArgs.join(' ')}`;
+                    fs.writeFileSync(scriptFile, scriptContent);
+                    fs.chmodSync(scriptFile, '755');
+                    serverCommand = scriptFile;
+                    serverArgs = [];
+                }
+            }
+
+            // Log the exact command being executed
+            console.log('[CTM] Starting MCP server with command:', serverCommand);
+            console.log('[CTM] Arguments:', serverArgs);
+            console.log('[CTM] Full command:', `${serverCommand} ${serverArgs.join(' ')}`);
 
             this.transport = new StdioClientTransport({
                 command: serverCommand,
@@ -38,9 +91,12 @@ export class MCPClient {
                 capabilities: {}
             });
 
+            console.log('[CTM] Connecting to MCP server...');
             await this.client.connect(this.transport);
             this.connected = true;
+            console.log('[CTM] Successfully connected to MCP server');
         } catch (error) {
+            console.error('[CTM] Failed to connect to MCP server:', error);
             throw new Error(`Failed to connect to CTM server: ${error instanceof Error ? error.message : String(error)}`);
         }
     }

@@ -43,6 +43,11 @@
           "type": "array",
           "description": "Arguments for CTM server command",
           "default": ["run", "ctm-server"]
+        },
+        "ctm.serverPath": {
+          "type": "string",
+          "description": "Working directory for CTM server (path to CTM repository). Leave empty to auto-detect.",
+          "default": ""
         }
       }
     }
