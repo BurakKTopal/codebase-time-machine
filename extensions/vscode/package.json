@@ -64,7 +64,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && node -e \"require('fs').copyFileSync('src/CLAUDE.md', 'out/CLAUDE.md')\"",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "test": "mocha --require tsx --require src/test/setup.ts --extensions ts src/**/*.test.ts",

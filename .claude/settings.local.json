@@ -34,7 +34,8 @@
       "Bash(code --uninstall-extension:*)",
       "Bash(code --install-extension:*)",
       "Bash(npm install:*)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(cp:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

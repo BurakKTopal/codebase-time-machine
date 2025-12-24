@@ -12,6 +12,8 @@ export interface AgentConfig {
     branch?: string;
 }
 
+const maxIterations = 10;
+
 export class CTMAgent {
     private anthropic: Anthropic;
     private mcpClient: MCPClient;
@@ -40,7 +42,6 @@ export class CTMAgent {
 
         // Run agent loop
         let iteration = 0;
-        const maxIterations = 15;
         let finalResponse = '';
         let collectedContext: any = {};
         let totalInputTokens = 0;
@@ -60,9 +61,38 @@ export class CTMAgent {
 
             if (needsUserMessage) {
                 // First iteration or after Claude's text-only response - add user prompt
-                let userMessage = iteration === 1 ? initialPrompt : 'Continue your investigation.';
-                if (iteration === maxIterations - 1) {
-                    userMessage = `CRITICAL: This is iteration ${iteration} of ${maxIterations} - your LAST chance to provide a final summary. You MUST synthesize everything you've learned and provide a complete answer NOW. Do NOT make any more tool calls - just provide your final answer with all the context you've gathered.`;
+                let userMessage: string;
+
+                if (iteration === 1) {
+                    userMessage = initialPrompt;
+                } else if (iteration >= maxIterations - 1) {
+                    // Final iterations - demand synthesis NOW
+                    userMessage = `<system_reminder>CRITICAL: This is iteration ${iteration} of ${maxIterations}. You are at or near the maximum iteration limit.
+
+You MUST provide your final answer NOW. Do NOT make any more tool calls.
+
+Synthesize everything you have learned so far and provide a complete 3-5 paragraph answer that explains:
+1. What this code is and when it was added
+2. WHY it exists (the problem it solved)
+3. HOW it solves the problem
+4. Any relevant context or recommendations
+
+Use the information you have already gathered. If you don't have all the details, provide the best answer you can with what you know.</system_reminder>\n\nProvide your final answer now. Do not use any tools.`;
+                } else {
+                    // Add iteration reminder
+                    const remaining = maxIterations - iteration;
+                    let reminder = `<system_reminder>Iteration ${iteration}/${maxIterations}. ${remaining} iterations remaining. `;
+
+                    if (iteration >= maxIterations - 3) {
+                        reminder += `You're running low on iterations - start synthesizing your findings and preparing final answer.`;
+                    } else if (iteration >= maxIterations / 2) {
+                        reminder += `Halfway through - ensure you're digging deep, not just gathering surface info.`;
+                    } else {
+                        reminder += `Plenty of iterations left - investigate thoroughly, read diffs, check historical_commits.`;
+                    }
+
+                    reminder += `</system_reminder>\n\nContinue your investigation.`;
+                    userMessage = reminder;
                 }
 
                 console.log('[CTM Agent] Adding new user message to history (last message was assistant or empty)');
@@ -88,10 +118,16 @@ export class CTMAgent {
             const messageStructure = messages.map(m => m.role).join(' → ');
             console.log(`[CTM Agent] Message flow: ${messageStructure}`);
 
+            // Disable tools at final iterations to force synthesis
+            const toolsToUse = iteration >= maxIterations - 1 ? [] : tools;
+            if (toolsToUse.length === 0 && iteration >= maxIterations - 1) {
+                console.log(`[CTM Agent] Tools DISABLED - forcing final synthesis (iteration ${iteration}/${maxIterations})`);
+            }
+
             const response = await this.anthropic.messages.create({
                 model: 'claude-3-5-haiku-20241022',
                 max_tokens: 4000,
-                tools: tools,
+                tools: toolsToUse,
                 messages: messages
             });
 
@@ -120,6 +156,8 @@ export class CTMAgent {
             // Handle tool calls
             const toolUses = response.content.filter(block => block.type === 'tool_use');
 
+            console.log(`[CTM Agent] Response content blocks: ${response.content.length} (${response.content.map(b => b.type).join(', ')})`);
+
             if (toolUses.length > 0) {
                 console.log('[CTM Agent] Claude wants to use', toolUses.length, 'tool(s)');
 
@@ -134,21 +172,38 @@ export class CTMAgent {
                         ...this.conversationHistory,
                         {
                             role: 'user',
-                            content: 'CRITICAL: You have reached the maximum iteration limit. Based on ALL the context you have gathered so far, provide your final summary RIGHT NOW. Do NOT attempt any more tool calls. Synthesize everything you learned and answer: Why does this code exist?'
+                            content: `EMERGENCY STOP: You have reached the maximum iteration limit (${maxIterations}/${maxIterations}).
+
+Based on ALL the context you have gathered so far, provide your final summary RIGHT NOW.
+
+You MUST provide a complete answer in 3-5 paragraphs covering:
+1. What this code is and when it was added (commit, author, date)
+2. WHY it exists - what problem did it solve?
+3. HOW it solves the problem - implementation details
+4. Any relevant context, recommendations, or caveats
+
+Use the information from your previous tool calls. If you don't have all details, provide the best answer you can with what you gathered.
+
+DO NOT say you need more information. DO NOT attempt any more tool calls. Synthesize what you have NOW.`
                         }
                     ];
 
-                    // Make one emergency call to force a text response
-                    console.log('[CTM Agent] Making emergency call for final summary...');
+                    // Make one emergency call to force a text response (NO TOOLS available)
+                    console.log('[CTM Agent] Making emergency call for final summary (tools disabled)...');
                     const emergencyResponse = await this.anthropic.messages.create({
                         model: 'claude-3-5-haiku-20241022',
                         max_tokens: 4000,
+                        tools: [], // Explicitly disable tools
                         messages: emergencyMessages
                     });
 
                     const emergencyText = emergencyResponse.content.find(block => block.type === 'text');
                     if (emergencyText && emergencyText.type === 'text') {
                         finalResponse = emergencyText.text;
+                        console.log('[CTM Agent] Emergency summary generated:', finalResponse.length, 'chars');
+                    } else {
+                        console.error('[CTM Agent] ERROR: Emergency call did not return text!');
+                        finalResponse = 'Investigation reached max iterations but failed to generate emergency summary.';
                     }
 
                     break;
@@ -196,12 +251,13 @@ export class CTMAgent {
                     content: toolResults
                 });
 
+                // PRUNING DISABLED FOR TESTING - keeping full conversation history
                 // Prune conversation history to prevent unbounded growth
                 // CRITICAL: Keep complete conversation turns (assistant + user pairs) to maintain tool_use/tool_result pairing
                 const MAX_HISTORY_TURNS = 3; // Keep last 3 complete turns (6 messages: 3 assistant + 3 user)
                 const maxHistoryMessages = MAX_HISTORY_TURNS * 2; // Each turn = assistant + user message
 
-                if (this.conversationHistory.length > maxHistoryMessages + 1) {
+                if (false && this.conversationHistory.length > maxHistoryMessages + 1) {
                     console.log('[CTM Agent] === PRUNING DEBUG ===');
                     console.log('[CTM Agent] History before pruning:', this.conversationHistory.map(m => m.role).join(' → '));
                     console.log('[CTM Agent] Total messages:', this.conversationHistory.length);
@@ -240,11 +296,15 @@ export class CTMAgent {
                 }
             } else {
                 // No more tool calls, Claude has finished
-                console.log('[CTM Agent] Investigation complete');
+                console.log('[CTM Agent] No tool uses - investigation complete');
 
                 const finalText = response.content.find(block => block.type === 'text');
                 if (finalText && finalText.type === 'text') {
                     finalResponse = finalText.text;
+                    console.log(`[CTM Agent] Final response captured: ${finalResponse.length} chars`);
+                } else {
+                    console.error('[CTM Agent] ERROR: No text block in final response!');
+                    console.error('[CTM Agent] Response content:', JSON.stringify(response.content, null, 2));
                 }
 
                 break;
@@ -252,7 +312,8 @@ export class CTMAgent {
         }
 
         if (iteration >= maxIterations) {
-            console.log('[CTM Agent] WARNING: Reached max iterations');
+            console.log('[CTM Agent] WARNING: Reached max iterations without natural completion');
+            console.log('[CTM Agent] Attempting to extract final response from conversation history...');
             // Extract last text response
             for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
                 const msg = this.conversationHistory[i];
@@ -260,9 +321,13 @@ export class CTMAgent {
                     const textBlock = msg.content.find(block => block.type === 'text');
                     if (textBlock && textBlock.type === 'text') {
                         finalResponse = textBlock.text;
+                        console.log(`[CTM Agent] Extracted ${finalResponse.length} chars from history message ${i}`);
                         break;
                     }
                 }
+            }
+            if (!finalResponse) {
+                console.error('[CTM Agent] ERROR: Could not find any text in conversation history!');
             }
         }
 
@@ -284,68 +349,36 @@ export class CTMAgent {
     }
 
     private buildInitialPrompt(): string {
-        return `Investigate: "Why does this code exist?"
+        const fs = require('fs');
+        const path = require('path');
 
-**Target:**
-- File: ${this.config.filePath}
-- Lines: ${this.config.lineStart}-${this.config.lineEnd}
-- Branch: ${this.config.branch || 'HEAD'}
+        // Load compact CLAUDE.md from the bundled copy in the extension
+        const claudeMdPath = path.join(__dirname, 'CLAUDE.md');
+        let claudeGuide = '';
+        try {
+            claudeGuide = fs.readFileSync(claudeMdPath, 'utf-8');
+            console.log(`[CTM Agent] Loaded bundled CLAUDE.md: ${claudeGuide.length} chars`);
+        } catch (error) {
+            console.error('[CTM Agent] CRITICAL: Could not load bundled CLAUDE.md:', error);
+            console.error('[CTM Agent] Tried path:', claudeMdPath);
+            claudeGuide = 'You are investigating code. Use get_local_line_context with history_depth=5-10 to start.';
+        }
 
-**You have a maximum of 15 iterations. Be efficient.**
+        // Simple task definition - all guidance is in CLAUDE.md
+        return `${claudeGuide}
 
-**REQUIRED FIRST STEP:**
+---
 
-Call get_local_line_context with these parameters:
-- repo_path: "${this.config.repoPath}"
-- file_path: "${this.config.filePath}"
-- line_start: ${this.config.lineStart}
-- line_end: ${this.config.lineEnd}
-- ref: "${this.config.branch || 'main'}"
-- history_depth: 7
-- include_discussions: true
+## Your Investigation Task
 
-This single call provides comprehensive context:
-- Current code content
-- Who added it and when (blame_commit)
-- Why it was added (commit message)
-- Full decision chain (PR, linked issues, discussions)
-- Historical context
+Investigate this code:
+- **Repository:** ${this.config.owner}/${this.config.repo}
+- **File:** ${this.config.filePath}
+- **Lines:** ${this.config.lineStart}-${this.config.lineEnd}
+- **Branch:** ${this.config.branch || 'HEAD'}
+- **Local Path:** ${this.config.repoPath}
 
-**NEXT STEP - Analyze & Answer:**
-
-CRITICAL: Carefully analyze the get_local_line_context results:
-
-1. **READ THE ACTUAL CODE FIRST:**
-   - Look at the "current_content" field
-   - This is the EXACT code the user selected
-   - Understand what this specific code does
-
-2. **VERIFY THE BLAME COMMIT:**
-   - Read the "blame_commit" message
-   - Does it describe THIS specific code?
-   - WARNING: Git blame shows the LAST commit that touched these lines (might have just edited nearby code!)
-   - If the blame commit doesn't match the code content, check "historical_commits" to find the actual origin
-
-3. **PROVIDE YOUR ANSWER** (2-4 paragraphs) about THE CODE IN current_content:
-   - What THIS code does (describe the actual selected code!)
-   - Why it was added (from the correct commit, not a misleading blame)
-   - Key context from commit/PR/issue
-   - Technical decisions
-
-**In 80% of cases, get_local_line_context provides everything. Provide your answer immediately.**
-
-**Only if critical information is missing:**
-- get_pr: If PR number exists but you need more details
-- get_issue: If issue number exists but you need more context
-- get_commit_diff: If you need to see the exact code changes
-
-**DO NOT:**
-- Make redundant tool calls
-- Fetch files you don't need
-- Investigate unrelated code
-- Use multiple tools when one provides the answer
-
-Focus exclusively on: "Why does this code exist?" - Answer it clearly and stop.`;
+**You have ${maxIterations} iterations.** Follow the 5-step investigation strategy above. Begin your investigation now.`;
     }
 
     private async getAvailableTools(): Promise<Anthropic.Tool[]> {
@@ -381,59 +414,72 @@ Focus exclusively on: "Why does this code exist?" - Answer it clearly and stop.`
 
         const truncated: any = {};
 
-        // Handle get_local_line_context and get_line_context specially
+        // Handle get_local_line_context and get_line_context - create compact text summary
         if (toolName === 'get_local_line_context' || toolName === 'get_line_context') {
-            // Keep essential fields, truncate large ones
-            if (result.current_content) truncated.current_content = result.current_content; // NEW FORMAT
-            if (result.line_range) truncated.line_range = result.line_range; // NEW FORMAT
-            if (result.line_content) truncated.line_content = result.line_content; // OLD FORMAT (backwards compat)
-            if (result.file_path) truncated.file_path = result.file_path;
-            if (result.line_start) truncated.line_start = result.line_start;
-            if (result.line_end) truncated.line_end = result.line_end;
+            const lines: string[] = [];
 
-            // Truncate blame commit but keep key info
+            // Code content
+            if (result.current_content || result.line_content) {
+                lines.push('CODE:');
+                lines.push(result.current_content || result.line_content);
+                lines.push('');
+            }
+
+            // Blame commit (last touch - may not be the original introduction!)
             if (result.blame_commit) {
-                truncated.blame_commit = {
-                    sha: result.blame_commit.sha,
-                    author: result.blame_commit.author,
-                    date: result.blame_commit.date,
-                    message: this.truncateString(result.blame_commit.message, 500)
-                };
+                const bc = result.blame_commit;
+                const shortSha = bc.sha?.substring(0, 8) || 'unknown';
+                const date = bc.date?.substring(0, 10) || 'unknown';
+                const firstLine = bc.message?.split('\n')[0] || '';
+                lines.push(`BLAME (last touch): ${shortSha} by ${bc.author} on ${date}`);
+                lines.push(`  "${this.truncateString(firstLine, 100)}"`);
+                lines.push('');
             }
 
-            // Keep PR/issue summaries but truncate
+            // Historical commits - KEY for finding when code was actually introduced
+            if (result.historical_commits && Array.isArray(result.historical_commits) && result.historical_commits.length > 0) {
+                lines.push(`HISTORY (${result.historical_commits.length} commits before blame):`);
+                result.historical_commits.slice(0, 10).forEach((commit: any, idx: number) => {
+                    const shortSha = commit.sha?.substring(0, 8) || 'unknown';
+                    const date = commit.date?.substring(0, 10) || 'unknown';
+                    const firstLine = commit.message?.split('\n')[0] || '';
+                    const stats = commit.stats ? ` [+${commit.stats.additions}/-${commit.stats.deletions}]` : '';
+                    lines.push(`  ${idx + 1}. ${shortSha} ${date}${stats} "${this.truncateString(firstLine, 80)}"`);
+                });
+                lines.push('');
+            }
+
+            // PR context
             if (result.pull_request) {
-                truncated.pull_request = {
-                    number: result.pull_request.number,
-                    title: result.pull_request.title,
-                    state: result.pull_request.state,
-                    body: this.truncateString(result.pull_request.body, 1000)
-                };
+                const pr = result.pull_request;
+                lines.push(`PR: #${pr.number} "${this.truncateString(pr.title || '', 100)}"`);
+                if (pr.body) {
+                    lines.push(`  ${this.truncateString(pr.body, 300)}`);
+                }
+                lines.push('');
+            } else {
+                lines.push('PR: None found (likely direct commit to main)');
+                lines.push('');
             }
 
-            if (result.linked_issues && Array.isArray(result.linked_issues)) {
-                truncated.linked_issues = result.linked_issues.slice(0, 3).map((issue: any) => ({
-                    number: issue.number,
-                    title: issue.title,
-                    body: this.truncateString(issue.body, 500)
-                }));
+            // Linked issues
+            if (result.linked_issues && result.linked_issues.length > 0) {
+                lines.push('LINKED ISSUES:');
+                result.linked_issues.slice(0, 3).forEach((issue: any) => {
+                    lines.push(`  #${issue.number}: ${this.truncateString(issue.title || '', 80)}`);
+                    if (issue.body) {
+                        lines.push(`    ${this.truncateString(issue.body, 200)}`);
+                    }
+                });
+                lines.push('');
             }
 
-            // Historical commits - keep limited count
-            if (result.historical_commits && Array.isArray(result.historical_commits)) {
-                truncated.historical_commits = result.historical_commits.slice(0, 3).map((commit: any) => ({
-                    sha: commit.sha,
-                    author: commit.author,
-                    date: commit.date,
-                    message: this.truncateString(commit.message, 300)
-                }));
+            // Hints from the tool
+            if (result.context_availability?.suggestions && result.context_availability.suggestions.length > 0) {
+                lines.push(`SUGGESTIONS: ${result.context_availability.suggestions.join('; ')}`);
             }
 
-            if (result.context_availability_score !== undefined) {
-                truncated.context_availability_score = result.context_availability_score;
-            }
-
-            return JSON.stringify(truncated);
+            return lines.join('\n');
         }
 
         // For file content tools, truncate aggressively
@@ -451,20 +497,62 @@ Focus exclusively on: "Why does this code exist?" - Answer it clearly and stop.`
             return JSON.stringify(truncated);
         }
 
-        // For commit history tools, limit array size
+        // For commit history tools, create compact text list
         if (toolName === 'get_github_file_history' || toolName === 'trace_file_history') {
             if (result.commits && Array.isArray(result.commits)) {
-                truncated.commits = result.commits.slice(0, MAX_ARRAY_ITEMS).map((c: any) => ({
-                    sha: c.sha,
-                    author: c.author,
-                    date: c.date,
-                    message: this.truncateString(c.message, 200)
-                }));
-                if (result.commits.length > MAX_ARRAY_ITEMS) {
-                    truncated.commits_truncated = `Showing ${MAX_ARRAY_ITEMS} of ${result.commits.length} commits`;
+                const lines: string[] = [];
+                lines.push(`COMMIT HISTORY (${result.commits.length} total):`);
+                result.commits.slice(0, 15).forEach((c: any, idx: number) => {
+                    const shortSha = c.sha?.substring(0, 8) || 'unknown';
+                    const date = c.date?.substring(0, 10) || 'unknown';
+                    const firstLine = c.message?.split('\n')[0] || '';
+                    const stats = c.stats ? ` [+${c.stats.additions}/-${c.stats.deletions}]` : '';
+                    lines.push(`  ${idx + 1}. ${shortSha} ${date}${stats} "${this.truncateString(firstLine, 80)}"`);
+                });
+                if (result.commits.length > 15) {
+                    lines.push(`  ... ${result.commits.length - 15} more commits not shown`);
                 }
+                return lines.join('\n');
             }
             return JSON.stringify(truncated);
+        }
+
+        // For get_commit, create compact text summary
+        if (toolName === 'get_commit' || toolName === 'get_github_commit') {
+            const lines: string[] = [];
+            lines.push(`COMMIT: ${result.sha?.substring(0, 8)} by ${result.author} on ${result.date?.substring(0, 10)}`);
+            if (result.message) {
+                lines.push(`MESSAGE: ${this.truncateString(result.message, 500)}`);
+            }
+            if (result.stats) {
+                lines.push(`CHANGES: +${result.stats.additions || 0}/-${result.stats.deletions || 0} lines`);
+            }
+            if (result.files && Array.isArray(result.files)) {
+                lines.push(`FILES (${result.files.length}): ${result.files.slice(0, 10).map((f: any) => f.path || f).join(', ')}`);
+            }
+            return lines.join('\n');
+        }
+
+        // For get_commit_diff, show the diff but truncate intelligently
+        if (toolName === 'get_commit_diff') {
+            const lines: string[] = [];
+            if (result.commit) {
+                lines.push(`COMMIT: ${result.commit.sha?.substring(0, 8)} by ${result.commit.author}`);
+                lines.push(`MESSAGE: ${this.truncateString(result.commit.message, 300)}`);
+                lines.push('');
+            }
+            if (result.diff) {
+                const diffLines = result.diff.split('\n');
+                if (diffLines.length > 100) {
+                    lines.push(`DIFF (showing first 100 of ${diffLines.length} lines):`);
+                    lines.push(diffLines.slice(0, 100).join('\n'));
+                    lines.push(`... ${diffLines.length - 100} more lines not shown`);
+                } else {
+                    lines.push('DIFF:');
+                    lines.push(result.diff);
+                }
+            }
+            return lines.join('\n');
         }
 
         // Default: truncate all string fields and limit arrays
