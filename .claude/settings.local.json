@@ -20,7 +20,8 @@
       "Bash(uv run:*)",
       "mcp__ctm__list_github_tree",
       "mcp__ctm__get_activity_summary",
-      "mcp__ctm__trace_github_symbol_history"
+      "mcp__ctm__trace_github_symbol_history",
+      "mcp__ctm__search_github_commits"
     ]
   },
   "enableAllProjectMcpServers": true,

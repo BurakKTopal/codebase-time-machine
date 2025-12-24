@@ -429,7 +429,7 @@ async def list_tools() -> list[Tool]:
         # Symbol tracking tools
         Tool(
             name="get_file_symbols",
-            description="Extract code symbols (functions, classes, methods) from a local file using tree-sitter parsing.",
+            description="Extract code symbols (functions, classes, methods) from a local file using tree-sitter parsing. Supports Python, JavaScript, TypeScript, Go, and Rust.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -443,7 +443,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_github_file_symbols",
-            description="Extract code symbols from a file in any GitHub repository without cloning.",
+            description="Extract code symbols from a file in any GitHub repository without cloning. Supports Python, JavaScript, TypeScript, Go, and Rust.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -457,7 +457,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "path": {
                         "type": "string",
-                        "description": "File path relative to repo root (must be a Python file)",
+                        "description": "File path relative to repo root",
                     },
                     "ref": {
                         "type": "string",
@@ -469,7 +469,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trace_symbol_history",
-            description="Track the history of a specific symbol (function/class/method) across commits in a LOCAL repository. Shows when it was added, modified, or renamed.",
+            description="Track the history of a specific symbol (function/class/method) across commits in a LOCAL repository. Shows when it was added, modified, or renamed. Supports Python, JavaScript, TypeScript, Go, and Rust.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -496,7 +496,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trace_github_symbol_history",
-            description="Track the history of a specific symbol (function/class/method) across commits in any GitHub repository WITHOUT cloning. Shows when it was added, modified, or deleted with commit details.",
+            description="Track the history of a specific symbol (function/class/method) across commits in any GitHub repository WITHOUT cloning. Shows when it was added, modified, or deleted with commit details. Supports Python, JavaScript, TypeScript, Go, and Rust.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -510,7 +510,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "path": {
                         "type": "string",
-                        "description": "File path relative to repo root (must be a Python file)",
+                        "description": "File path relative to repo root",
                     },
                     "symbol_name": {
                         "type": "string",
