@@ -1006,6 +1006,115 @@ class GitHubClient:
 
         return result
 
+    async def pickaxe_search(
+        self,
+        search_string: str,
+        path: str | None = None,
+        max_commits: int = 20,
+        regex: bool = False,
+    ) -> dict:
+        """Find commits that introduced or removed a specific string.
+
+        This emulates git's pickaxe feature (git log -S) by analyzing commit diffs
+        via the GitHub API. Note: This is slower than local pickaxe since it must
+        fetch and analyze each commit's diff.
+
+        Args:
+            search_string: The string/code to search for.
+            path: Optional file path to limit the search.
+            max_commits: Maximum number of commits to analyze.
+            regex: If True, treat search_string as a regex pattern.
+
+        Returns:
+            Dictionary with:
+                - commits: List of commits where the string was added/removed
+                - introduction_commit: The oldest commit (likely when code was added)
+                - search_string: The string that was searched
+        """
+        import asyncio
+
+        # Get file history
+        if path:
+            commits_data = await self.list_commits(path=path, per_page=max_commits)
+        else:
+            commits_data = await self.list_commits(per_page=max_commits)
+
+        if not commits_data:
+            return {
+                "commits": [],
+                "introduction_commit": None,
+                "search_string": search_string,
+            }
+
+        matching_commits = []
+
+        # Compile regex if needed
+        if regex:
+            pattern = re.compile(search_string)
+        else:
+            pattern = None
+
+        async def check_commit(commit_summary: dict) -> dict | None:
+            """Check if a commit's diff contains the search string."""
+            sha = commit_summary["sha"]
+            try:
+                commit_detail = await self.get_commit(sha)
+                files = commit_detail.get("files", [])
+
+                for file_info in files:
+                    # If path filter specified, only check that file
+                    if path and file_info.get("path") != path:
+                        continue
+
+                    patch = file_info.get("patch", "")
+                    if not patch:
+                        continue
+
+                    # Check if the search string appears in added/removed lines
+                    if regex and pattern:
+                        if pattern.search(patch):
+                            return commit_detail
+                    else:
+                        if search_string in patch:
+                            return commit_detail
+
+                return None
+            except Exception:
+                return None
+
+        # Check commits in parallel (but limit concurrency)
+        semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
+
+        async def check_with_semaphore(commit: dict) -> dict | None:
+            async with semaphore:
+                return await check_commit(commit)
+
+        results = await asyncio.gather(*[check_with_semaphore(c) for c in commits_data])
+
+        # Filter out None results and collect matching commits
+        for result in results:
+            if result:
+                matching_commits.append(
+                    {
+                        "sha": result["sha"],
+                        "short_sha": result["sha"][:7],
+                        "message": result["message"],
+                        "subject": result["message"].split("\n")[0],
+                        "author": result["author"]["name"],
+                        "date": result["author"]["date"],
+                    }
+                )
+
+        # The introduction commit is the oldest one (last in the list)
+        introduction_commit = matching_commits[-1] if matching_commits else None
+
+        return {
+            "commits": matching_commits,
+            "introduction_commit": introduction_commit,
+            "search_string": search_string,
+            "total_analyzed": len(commits_data),
+        }
+
     @classmethod
     def from_remote_url(cls, remote_url: str, token: str | None = None) -> "GitHubClient":
         """Create client from git remote URL.

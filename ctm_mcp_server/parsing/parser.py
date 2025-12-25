@@ -637,7 +637,11 @@ class CodeParser:
                     name = None
                     if declarator.type == "function_declarator":
                         for child in declarator.children:
-                            if child.type in ("identifier", "field_identifier", "qualified_identifier"):
+                            if child.type in (
+                                "identifier",
+                                "field_identifier",
+                                "qualified_identifier",
+                            ):
                                 name = code[child.start_byte : child.end_byte]
                                 break
                     else:

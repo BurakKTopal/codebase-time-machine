@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MCPClient } from './mcpClient';
-import { CTMAgent, ProgressUpdate } from './agent';
+import { CTMAgent, ProgressUpdate, InvestigationState, InvestigationResult } from './agent';
 import { ContextPanel, ProgressCallback } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
 
@@ -8,6 +8,7 @@ let mcpClient: MCPClient | null = null;
 let currentAgent: CTMAgent | null = null;
 let currentPanel: ContextPanel | null = null;
 let currentSummary: string = '';
+let currentInvestigationState: InvestigationState | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Codebase Time Machine extension activated');
@@ -193,15 +194,33 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
 
             let summary;
             let rawContext;
+            let result: InvestigationResult;
             try {
-                const result = await agent.investigate();
+                result = await agent.investigate();
                 summary = result.summary;
                 rawContext = result.rawContext;
                 console.log('[CTM] Agent investigation complete');
                 console.log('[CTM] Summary length:', summary.length, 'characters');
+                console.log('[CTM] Completion reason:', result.completionReason);
+                console.log('[CTM] Context quality:', result.contextQuality);
+                console.log('[CTM] Can continue:', result.canContinue);
                 console.groupCollapsed('[CTM] 📦 Collected Context (click to expand)');
                 console.log(JSON.stringify(rawContext, null, 2));
                 console.groupEnd();
+
+                // Generate summary for continuation if needed
+                if (result.canContinue) {
+                    console.log('[CTM] Generating investigation state for potential continuation...');
+                    const investigationSummary = await agent.getInvestigationState(result.toolsUsed);
+                    currentInvestigationState = {
+                        ...investigationSummary,
+                        rawContext: result.rawContext,
+                        toolCallsUsed: result.toolCallsUsed,
+                        tokensUsed: result.tokensUsed
+                    };
+                    console.log('[CTM] Investigation state stored for continuation');
+                    console.log('[CTM] Tools used:', result.toolsUsed.join(', '));
+                }
             } catch (error) {
                 console.error('[CTM] ERROR: Agent investigation failed:', error);
                 throw new Error(`Agent investigation failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -244,7 +263,42 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 return await currentAgent.askFollowUp(question, currentSummary);
             });
 
-            currentPanel.show(summary, rawContext, context.extensionUri);
+            // Set up continue handler
+            currentPanel.setContinueHandler(async (onProgress: ProgressCallback) => {
+                if (!currentAgent || !currentInvestigationState) {
+                    throw new Error('No active investigation to continue');
+                }
+                console.log('[CTM] Continuing investigation...');
+
+                // Set up agent progress callback to forward to panel
+                currentAgent.setProgressCallback((update: ProgressUpdate) => {
+                    onProgress(update.message, update.percentage);
+                });
+
+                const continueResult = await currentAgent.continueInvestigation(currentInvestigationState);
+
+                // Update state for potential further continuation
+                if (continueResult.canContinue) {
+                    const newState = await currentAgent.getInvestigationState(continueResult.toolsUsed);
+                    currentInvestigationState = {
+                        ...newState,
+                        rawContext: continueResult.rawContext,
+                        toolCallsUsed: continueResult.toolCallsUsed,
+                        tokensUsed: continueResult.tokensUsed
+                    };
+                    console.log('[CTM] Updated investigation state, tools used:', continueResult.toolsUsed.join(', '));
+                } else {
+                    currentInvestigationState = null;
+                    console.log('[CTM] Investigation complete, no further continuation available');
+                }
+
+                // Update the summary for follow-up questions
+                currentSummary = continueResult.summary;
+
+                return continueResult;
+            });
+
+            currentPanel.show(summary, rawContext, context.extensionUri, result.canContinue);
 
             progress.report({ increment: 100, message: "Done!" });
             console.log('[CTM] ========== Analysis Complete ==========');

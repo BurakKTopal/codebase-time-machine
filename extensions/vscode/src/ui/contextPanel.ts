@@ -1,12 +1,16 @@
 import * as vscode from 'vscode';
+import { InvestigationResult } from '../agent';
 
 export type ProgressCallback = (message: string, percentage: number) => void;
 export type FollowUpHandler = (question: string, onProgress: ProgressCallback) => Promise<string>;
+export type ContinueHandler = (onProgress: ProgressCallback) => Promise<InvestigationResult>;
 
 export class ContextPanel {
     private panel: vscode.WebviewPanel | undefined;
     private onFollowUp: FollowUpHandler | undefined;
+    private onContinue: ContinueHandler | undefined;
     private conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    private canContinue: boolean = false;
 
     /**
      * Set the handler for follow-up questions
@@ -15,7 +19,15 @@ export class ContextPanel {
         this.onFollowUp = handler;
     }
 
-    show(summary: string, rawContext: any, _extensionUri: vscode.Uri): void {
+    /**
+     * Set the handler for continue investigation
+     */
+    setContinueHandler(handler: ContinueHandler): void {
+        this.onContinue = handler;
+    }
+
+    show(summary: string, rawContext: any, _extensionUri: vscode.Uri, canContinue: boolean = false): void {
+        this.canContinue = canContinue;
         // Reset conversation history for new investigation
         this.conversationHistory = [];
 
@@ -35,6 +47,7 @@ export class ContextPanel {
             this.panel.onDidDispose(() => {
                 this.panel = undefined;
                 this.onFollowUp = undefined;
+                this.onContinue = undefined;
             });
 
             // Set up message handler
@@ -70,6 +83,48 @@ export class ContextPanel {
                             this.conversationHistory.push({
                                 role: 'assistant',
                                 content: `Error: ${errorMsg}`
+                            });
+                            this.updateConversation(false);
+                        }
+                    }
+
+                    // Handle continue investigation
+                    if (message.command === 'continueInvestigation' && this.onContinue) {
+                        console.log('[ContextPanel] Received continue investigation request');
+
+                        // Hide the continue button and show progress
+                        this.panel?.webview.postMessage({ command: 'hideContinueButton' });
+                        this.updateConversation(true, 'Continuing investigation...', 5);
+
+                        try {
+                            const onProgress: ProgressCallback = (progressMessage, percentage) => {
+                                this.updateConversation(true, progressMessage, percentage);
+                            };
+
+                            const result = await this.onContinue(onProgress);
+
+                            // Add the new summary to conversation
+                            this.conversationHistory.push({
+                                role: 'assistant',
+                                content: result.summary
+                            });
+
+                            // Update canContinue based on new result
+                            this.canContinue = result.canContinue;
+
+                            // Update UI
+                            this.updateConversation(false);
+
+                            // Show continue button again if still can continue
+                            if (result.canContinue) {
+                                this.panel?.webview.postMessage({ command: 'showContinueButton' });
+                            }
+                        } catch (error) {
+                            console.error('[ContextPanel] Continue error:', error);
+                            const errorMsg = error instanceof Error ? error.message : String(error);
+                            this.conversationHistory.push({
+                                role: 'assistant',
+                                content: `Error continuing investigation: ${errorMsg}`
                             });
                             this.updateConversation(false);
                         }
@@ -299,6 +354,38 @@ export class ContextPanel {
             opacity: 0.6;
             cursor: not-allowed;
         }
+        .continue-section {
+            background: var(--vscode-inputValidation-warningBackground);
+            border: 1px solid var(--vscode-inputValidation-warningBorder);
+            border-radius: 6px;
+            padding: 16px;
+            margin: 20px 0;
+        }
+        .continue-section h3 {
+            margin: 0 0 8px 0;
+            color: var(--vscode-foreground);
+        }
+        .continue-section p {
+            margin: 0 0 12px 0;
+            color: var(--vscode-descriptionForeground);
+        }
+        #continueButton {
+            padding: 8px 16px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: inherit;
+        }
+        #continueButton:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
+        #continueButton:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -306,6 +393,12 @@ export class ContextPanel {
 
     <div class="summary">
         ${htmlSummary}
+    </div>
+
+    <div id="continue-section" class="continue-section" style="display: ${this.canContinue ? 'block' : 'none'};">
+        <h3>Investigation Incomplete</h3>
+        <p>The agent reached its tool call limit. Some context may be missing.</p>
+        <button id="continueButton">Continue Investigating</button>
     </div>
 
     <div class="section">
@@ -381,6 +474,8 @@ export class ContextPanel {
         const input = document.getElementById('followUpInput');
         const sendButton = document.getElementById('sendButton');
         const conversation = document.getElementById('conversation');
+        const continueSection = document.getElementById('continue-section');
+        const continueButton = document.getElementById('continueButton');
 
         function sendQuestion() {
             const question = input.value.trim();
@@ -410,11 +505,28 @@ export class ContextPanel {
             }
         });
 
+        // Continue investigation button
+        if (continueButton) {
+            continueButton.addEventListener('click', () => {
+                continueButton.disabled = true;
+                continueButton.textContent = 'Continuing...';
+                vscode.postMessage({ command: 'continueInvestigation' });
+            });
+        }
+
         // Handle messages from extension
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (message.command === 'updateConversation') {
                 updateConversation(message.history, message.isLoading, message.loadingMessage, message.percentage);
+            }
+            if (message.command === 'hideContinueButton' && continueSection) {
+                continueSection.style.display = 'none';
+            }
+            if (message.command === 'showContinueButton' && continueSection && continueButton) {
+                continueSection.style.display = 'block';
+                continueButton.disabled = false;
+                continueButton.textContent = 'Continue Investigating';
             }
         });
 

@@ -36,7 +36,8 @@
       "Bash(npm install:*)",
       "Bash(npm test:*)",
       "Bash(cp:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(find:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
