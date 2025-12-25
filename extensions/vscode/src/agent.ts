@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { MCPClient } from './mcpClient';
 import { FactStore } from './factStore';
 import {
@@ -9,7 +8,13 @@ import {
     InvestigationState,
     AgentPhase
 } from './types';
-import { MAX_TOOL_CALLS, SYNTHESIS_THRESHOLD, CORE_TOOLS } from './constants';
+import { getSynthesisThreshold, CORE_TOOLS } from './constants';
+import {
+    createProvider,
+    ILLMProvider,
+    LLMTool,
+    LLMContentBlock
+} from './providers';
 
 // Re-export types for backward compatibility
 export type { AgentConfig, ProgressUpdate, ProgressCallback, InvestigationResult, InvestigationState };
@@ -22,19 +27,20 @@ export type { AgentConfig, ProgressUpdate, ProgressCallback, InvestigationResult
  * 2. State-based prompts instead of accumulated messages
  * 3. Tool outputs are extracted → deleted (not kept)
  * 4. Only CORE_TOOLS are sent (not all 35)
+ * 5. Provider-agnostic: works with any ILLMProvider
  */
 export class CTMAgent {
-    private anthropic: Anthropic;
+    private provider: ILLMProvider;
     private mcpClient: MCPClient;
     private config: AgentConfig;
     private factStore: FactStore;
     private progressCallback?: ProgressCallback;
     private systemPrompt: string = '';
-    private allTools: Anthropic.Tool[] = [];  // Cached tools
+    private allTools: LLMTool[] = [];  // Cached tools
     private toolResultCache: Map<string, any> = new Map();  // Cache tool results
 
     constructor(mcpClient: MCPClient, config: AgentConfig) {
-        this.anthropic = new Anthropic({ apiKey: config.apiKey, dangerouslyAllowBrowser: true });
+        this.provider = createProvider(config.provider, { apiKey: config.apiKey });
         this.mcpClient = mcpClient;
         this.config = config;
         this.factStore = new FactStore(config.apiKey);
@@ -67,14 +73,14 @@ export class CTMAgent {
     /**
      * Get tools - defaults to CORE_TOOLS for efficiency
      */
-    private async getToolsForRequest(useAllTools: boolean = false): Promise<Anthropic.Tool[]> {
+    private async getToolsForRequest(useAllTools: boolean = false): Promise<LLMTool[]> {
         // Load all tools once
         if (this.allTools.length === 0) {
             const mcpTools = await this.mcpClient.listTools();
             this.allTools = mcpTools.map(tool => ({
                 name: tool.name,
                 description: tool.description || `MCP tool: ${tool.name}`,
-                input_schema: tool.inputSchema as Anthropic.Tool.InputSchema
+                inputSchema: tool.inputSchema as Record<string, unknown>
             }));
             console.log(`[CTM Agent] Loaded ${this.allTools.length} total tools`);
         }
@@ -153,7 +159,7 @@ ${facts || 'No facts gathered yet. Start by calling get_local_line_context.'}
 ${toolsCalled.length > 0 ? toolsCalled.join(', ') : 'None yet'}
 
 ### Remaining Tool Calls
-${MAX_TOOL_CALLS - toolCallCount} calls remaining before synthesis.
+${this.config.maxToolCalls - toolCallCount} calls remaining before synthesis.
 
 ${this.factStore.hasEnoughContext()
     ? '**You have enough context. Consider synthesizing now or getting more details.**'
@@ -178,7 +184,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
         this.reportProgress({
             phase: 'investigate',
             toolCallCount: 0,
-            maxToolCalls: MAX_TOOL_CALLS,
+            maxToolCalls: this.config.maxToolCalls,
             message: 'Starting investigation...',
             percentage: 5
         });
@@ -196,7 +202,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             iteration++;
 
             // Phase transition check
-            if (phase === 'investigate' && toolCallCount >= SYNTHESIS_THRESHOLD) {
+            if (phase === 'investigate' && toolCallCount >= getSynthesisThreshold(this.config.maxToolCalls)) {
                 phase = 'synthesize';
                 completionReason = 'threshold_reached';
                 console.log(`[CTM Agent] PHASE TRANSITION: investigate → synthesize`);
@@ -205,7 +211,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 this.reportProgress({
                     phase: 'synthesize',
                     toolCallCount,
-                    maxToolCalls: MAX_TOOL_CALLS,
+                    maxToolCalls: this.config.maxToolCalls,
                     message: 'Synthesizing findings...',
                     percentage: 85
                 });
@@ -213,8 +219,8 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
 
             // Build state-based prompt (NOT conversation history)
             const statePrompt = this.buildStatePrompt(phase, toolCallCount);
-            const messages: Anthropic.MessageParam[] = [
-                { role: 'user', content: statePrompt }
+            const messages = [
+                { role: 'user' as const, content: statePrompt }
             ];
 
             // Tools only in investigate phase
@@ -226,22 +232,22 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             const promptTokensEstimate = Math.ceil(statePrompt.length / 4);
             console.log(`[CTM Agent] State prompt: ~${promptTokensEstimate} tokens (${statePrompt.length} chars)`);
 
-            // Make API call
-            const response = await this.anthropic.messages.create({
+            // Make API call using provider abstraction
+            const response = await this.provider.createMessage({
                 model: this.config.model,
-                max_tokens: 4000,
-                system: this.systemPrompt,
-                tools: toolsToUse,
-                messages: messages
+                maxTokens: 4000,
+                systemPrompt: this.systemPrompt,
+                tools: toolsToUse.length > 0 ? toolsToUse : undefined,
+                messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content as string }))
             });
 
-            totalInputTokens += response.usage.input_tokens;
-            totalOutputTokens += response.usage.output_tokens;
+            totalInputTokens += response.usage.inputTokens;
+            totalOutputTokens += response.usage.outputTokens;
 
-            console.log(`[CTM Agent] Response: input=${response.usage.input_tokens}, output=${response.usage.output_tokens}, stop=${response.stop_reason}`);
+            console.log(`[CTM Agent] Response: input=${response.usage.inputTokens}, output=${response.usage.outputTokens}, stop=${response.stopReason}`);
 
-            const textContent = response.content.find(block => block.type === 'text');
-            const toolUses = response.content.filter(block => block.type === 'tool_use');
+            const textContent = response.content.find((block: LLMContentBlock) => block.type === 'text');
+            const toolUses = response.content.filter((block: LLMContentBlock) => block.type === 'tool_use');
 
             // SYNTHESIS PHASE: Get text response and finish
             if (phase === 'synthesize') {
@@ -252,7 +258,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                     this.reportProgress({
                         phase: 'complete',
                         toolCallCount,
-                        maxToolCalls: MAX_TOOL_CALLS,
+                        maxToolCalls: this.config.maxToolCalls,
                         message: 'Analysis complete!',
                         percentage: 100
                     });
@@ -272,15 +278,15 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                     if (toolUse.type !== 'tool_use') continue;
 
                     toolCallCount++;
-                    console.log(`[CTM Agent] Tool call ${toolCallCount}/${MAX_TOOL_CALLS}: ${toolUse.name}`);
+                    console.log(`[CTM Agent] Tool call ${toolCallCount}/${this.config.maxToolCalls}: ${toolUse.name}`);
 
                     this.reportProgress({
                         phase: 'investigate',
                         toolCallCount,
-                        maxToolCalls: MAX_TOOL_CALLS,
+                        maxToolCalls: this.config.maxToolCalls,
                         currentTool: toolUse.name,
                         message: `Analyzing ${this.formatToolName(toolUse.name)}...`,
-                        percentage: Math.min(80, 10 + (toolCallCount / MAX_TOOL_CALLS) * 70)
+                        percentage: Math.min(80, 10 + (toolCallCount / this.config.maxToolCalls) * 70)
                     });
 
                     // Execute tool
@@ -292,8 +298,8 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                     console.log(`[CTM Agent] Total facts: ${this.factStore.getFactCount()}`);
 
                     // Check hard cap
-                    if (toolCallCount >= MAX_TOOL_CALLS) {
-                        console.log(`[CTM Agent] Hit MAX_TOOL_CALLS - forcing synthesis`);
+                    if (toolCallCount >= this.config.maxToolCalls) {
+                        console.log(`[CTM Agent] Hit this.config.maxToolCalls - forcing synthesis`);
                         phase = 'synthesize';
                         completionReason = 'limit_reached';
                         break;
@@ -313,7 +319,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                     this.reportProgress({
                         phase: 'complete',
                         toolCallCount,
-                        maxToolCalls: MAX_TOOL_CALLS,
+                        maxToolCalls: this.config.maxToolCalls,
                         message: 'Analysis complete!',
                         percentage: 100
                     });
@@ -560,18 +566,18 @@ If the information you need is not available, say so - don't keep searching.`;
             // CRITICAL: Rebuild prompt each iteration with updated facts
             const prompt = buildFollowUpPrompt();
 
-            const response = await this.anthropic.messages.create({
+            const response = await this.provider.createMessage({
                 model: this.config.model,
-                max_tokens: 2000,
-                system: this.systemPrompt,
+                maxTokens: 2000,
+                systemPrompt: this.systemPrompt,
                 tools: tools,
                 messages: [{ role: 'user', content: prompt }]
             });
 
-            console.log(`[CTM Agent] Follow-up response: input=${response.usage.input_tokens}, output=${response.usage.output_tokens}, stop=${response.stop_reason}`);
+            console.log(`[CTM Agent] Follow-up response: input=${response.usage.inputTokens}, output=${response.usage.outputTokens}, stop=${response.stopReason}`);
 
-            const textContent = response.content.find(block => block.type === 'text');
-            const toolUses = response.content.filter(block => block.type === 'tool_use');
+            const textContent = response.content.find((block: LLMContentBlock) => block.type === 'text');
+            const toolUses = response.content.filter((block: LLMContentBlock) => block.type === 'tool_use');
 
             // If no tool calls, we have our answer
             if (toolUses.length === 0) {
@@ -632,16 +638,16 @@ If the information you need is not available, say so - don't keep searching.`;
             const evidence = this.factStore.getEvidenceSummary();
             const evidenceSection = evidence ? `\n\nVerbatim Evidence:\n${evidence}` : '';
 
-            const synthResponse = await this.anthropic.messages.create({
+            const synthResponse = await this.provider.createMessage({
                 model: this.config.model,
-                max_tokens: 2000,
+                maxTokens: 2000,
                 messages: [{
                     role: 'user',
                     content: `Based on these facts, answer the question: "${question}"\n\nFacts:\n${this.factStore.getFactsSummary()}${evidenceSection}`
                 }]
             });
 
-            const textContent = synthResponse.content.find(block => block.type === 'text');
+            const textContent = synthResponse.content.find((block: LLMContentBlock) => block.type === 'text');
             finalResponse = textContent && textContent.type === 'text' ? textContent.text : 'Unable to find additional information.';
         }
 

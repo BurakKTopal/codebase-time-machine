@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { InvestigationResult } from '../agent';
-import { AVAILABLE_MODELS, DEFAULT_MODEL } from '../constants';
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from '../constants';
+import { getModelsForProvider, LLMModel } from '../providers';
 
 export type ProgressCallback = (message: string, percentage: number) => void;
 export type FollowUpHandler = (question: string, onProgress: ProgressCallback) => Promise<string>;
@@ -653,9 +654,13 @@ export class ContextPanel {
     private async handleModelChange(): Promise<void> {
         const config = vscode.workspace.getConfiguration('ctm');
         const currentModel = config.get<string>('model', DEFAULT_MODEL);
+        const currentProvider = config.get<string>('provider', DEFAULT_PROVIDER);
+
+        // Get models for current provider
+        const availableModels = getModelsForProvider(currentProvider);
 
         // Build quick pick items
-        const items = AVAILABLE_MODELS.map(model => ({
+        const items = availableModels.map((model: LLMModel) => ({
             label: model.label,
             description: model.description,
             detail: model.id === currentModel ? '$(check) Current model' : undefined,
@@ -663,7 +668,7 @@ export class ContextPanel {
         }));
 
         const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Select Claude model for code analysis',
+            placeHolder: 'Select model for code analysis',
             title: 'Change Model'
         });
 

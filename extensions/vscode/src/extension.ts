@@ -3,7 +3,7 @@ import { MCPClient } from './mcpClient';
 import { CTMAgent, ProgressUpdate, InvestigationState, InvestigationResult } from './agent';
 import { ContextPanel, ProgressCallback } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
-import { DEFAULT_MODEL } from './constants';
+import { DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_MAX_TOOL_CALLS } from './constants';
 
 let mcpClient: MCPClient | null = null;
 let currentAgent: CTMAgent | null = null;
@@ -156,22 +156,30 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 console.log('[CTM] Already connected to MCP server (reusing connection)');
             }
 
-            // Step 4: Get API key and model
+            // Step 4: Get provider, API key, and model
             progress.report({ increment: 40, message: "Checking configuration..." });
-            console.log('[CTM] Step 4: Getting Anthropic API key and model');
+            console.log('[CTM] Step 4: Getting provider, API key, and model');
             const config = vscode.workspace.getConfiguration('ctm');
-            const apiKey = config.get<string>('anthropicApiKey', '');
+            const provider = config.get<string>('provider', DEFAULT_PROVIDER);
+            // Support both new 'apiKey' and legacy 'anthropicApiKey' for backward compatibility
+            const apiKey = config.get<string>('apiKey', '') || config.get<string>('anthropicApiKey', '');
             if (!apiKey) {
-                throw new Error('Anthropic API key not configured. Please set it in VS Code settings (ctm.anthropicApiKey)');
+                throw new Error('API key not configured. Please set it in VS Code settings (ctm.apiKey)');
             }
             const model = config.get<string>('model', DEFAULT_MODEL);
+            const maxToolCalls = config.get<number>('maxToolCalls', DEFAULT_MAX_TOOL_CALLS);
+            console.log('[CTM] Using provider:', provider);
             console.log('[CTM] Using model:', model);
+            console.log('[CTM] Max tool calls:', maxToolCalls);
 
             // Step 5: Run agent investigation
             progress.report({ increment: 50, message: "Starting agent investigation..." });
             console.log('[CTM] Step 5: Launching CTM agent');
             const agent = new CTMAgent(mcpClient, {
+                provider: provider,
                 apiKey: apiKey,
+                model: model,
+                maxToolCalls: maxToolCalls,
                 owner: repoInfo.owner,
                 repo: repoInfo.repo,
                 repoPath: repoInfo.rootPath,
@@ -179,7 +187,6 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 lineStart: startLine,
                 lineEnd: endLine,
                 branch: currentBranch,
-                model: model,
                 selectedText: selectedText
             });
 

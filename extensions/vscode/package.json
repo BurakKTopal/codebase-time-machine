@@ -35,10 +35,27 @@
     "configuration": {
       "title": "Codebase Time Machine",
       "properties": {
+        "ctm.provider": {
+          "type": "string",
+          "enum": [
+            "anthropic"
+          ],
+          "enumDescriptions": [
+            "Anthropic Claude models"
+          ],
+          "default": "anthropic",
+          "description": "AI provider to use for code analysis"
+        },
+        "ctm.apiKey": {
+          "type": "string",
+          "description": "API key for the selected provider",
+          "default": ""
+        },
         "ctm.anthropicApiKey": {
           "type": "string",
-          "description": "Anthropic API key for AI summaries (get one at https://console.anthropic.com/)",
-          "default": ""
+          "description": "(Deprecated: Use ctm.apiKey instead) Anthropic API key for AI summaries",
+          "default": "",
+          "deprecationMessage": "This setting is deprecated. Please use ctm.apiKey instead."
         },
         "ctm.model": {
           "type": "string",
@@ -59,7 +76,14 @@
             "Opus 4.5 - Most advanced and intelligent"
           ],
           "default": "claude-3-5-haiku-20241022",
-          "description": "Claude model to use for code analysis"
+          "description": "Model ID from the selected provider"
+        },
+        "ctm.maxToolCalls": {
+          "type": "number",
+          "minimum": 3,
+          "maximum": 25,
+          "default": 12,
+          "description": "Maximum number of tool calls allowed during investigation. Higher values allow deeper analysis but cost more tokens."
         },
         "ctm.serverCommand": {
           "type": "string",

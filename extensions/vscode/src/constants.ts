@@ -3,16 +3,18 @@
  */
 
 /**
- * Maximum number of tool calls per investigation
- * Reduced from 12 - we need fewer calls with better context
+ * Default maximum number of tool calls per investigation
+ * Can be overridden via ctm.maxToolCalls setting
  */
-export const MAX_TOOL_CALLS = 8;
+export const DEFAULT_MAX_TOOL_CALLS = 12;
 
 /**
- * Threshold at which to consider synthesis
- * If context quality is good after this many calls, synthesize
+ * Calculate synthesis threshold from max tool calls
+ * Synthesis is triggered at ~75% of max to allow finishing touches
  */
-export const SYNTHESIS_THRESHOLD = 6;
+export function getSynthesisThreshold(maxToolCalls: number): number {
+    return Math.floor(maxToolCalls * 0.75);
+}
 
 /**
  * Core tools - balanced set for "why does this code exist?"
@@ -41,40 +43,10 @@ export const CORE_TOOLS = [
 ];
 
 /**
- * Available Claude models for selection
+ * Default provider if not configured
+ * Models are now defined in providers/anthropic.ts (or other provider files)
  */
-export const AVAILABLE_MODELS = [
-    {
-        id: 'claude-3-5-haiku-20241022',
-        label: 'Haiku 3.5',
-        description: 'Fast and cost-effective'
-    },
-    {
-        id: 'claude-haiku-4-5-20251001',
-        label: 'Haiku 4.5',
-        description: 'Improved speed and efficiency'
-    },
-    {
-        id: 'claude-sonnet-4-20250514',
-        label: 'Sonnet 4',
-        description: 'Balanced performance'
-    },
-    {
-        id: 'claude-sonnet-4-5-20250929',
-        label: 'Sonnet 4.5',
-        description: 'Enhanced balanced performance'
-    },
-    {
-        id: 'claude-opus-4-20250514',
-        label: 'Opus 4',
-        description: 'Most capable'
-    },
-    {
-        id: 'claude-opus-4-5-20251101',
-        label: 'Opus 4.5',
-        description: 'Most advanced and intelligent'
-    }
-];
+export const DEFAULT_PROVIDER = 'anthropic';
 
 /**
  * Default model if not configured

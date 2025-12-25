@@ -3,10 +3,18 @@
  */
 
 /**
+ * Streaming callback - called with each text chunk during streaming
+ */
+export type StreamingCallback = (text: string) => void;
+
+/**
  * Configuration for CTM Agent
  */
 export interface AgentConfig {
+    provider: string;           // Provider ID: 'anthropic', 'openai', 'gemini', etc.
     apiKey: string;
+    model: string;              // Model ID from the provider
+    maxToolCalls: number;       // Maximum tool calls allowed during investigation
     owner: string;
     repo: string;
     repoPath: string;
@@ -14,8 +22,8 @@ export interface AgentConfig {
     lineStart: number;
     lineEnd: number;
     branch?: string;
-    model: string;  // Claude model to use
-    selectedText: string;  // The actual text content the user selected
+    selectedText: string;       // The actual text content the user selected
+    onStream?: StreamingCallback;  // Optional: for real-time streaming responses
 }
 
 /**
