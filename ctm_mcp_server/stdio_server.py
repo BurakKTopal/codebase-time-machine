@@ -6,7 +6,9 @@ It exposes all CTM tools to LLM clients like Claude.
 """
 
 import json
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -23,7 +25,16 @@ from ctm_mcp_server.parsing.parser import CodeParser, ParserError
 server = Server("codebase-time-machine")
 
 # Initialize global cache for GitHub API responses
-_cache = get_cache(db_path="ctm_cache.db")
+# Allow override via environment variable, otherwise use user home directory
+cache_path = os.environ.get("CTM_CACHE_PATH")
+if cache_path:
+    db_path = cache_path
+else:
+    cache_dir = Path.home() / ".ctm"
+    cache_dir.mkdir(exist_ok=True)
+    db_path = str(cache_dir / "cache.db")
+
+_cache = get_cache(db_path=db_path)
 
 
 @server.list_tools()

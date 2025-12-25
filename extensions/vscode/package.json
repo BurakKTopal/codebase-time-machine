@@ -97,20 +97,20 @@
         },
         "ctm.serverCommand": {
           "type": "string",
-          "description": "Command to start CTM server",
-          "default": "uv"
+          "description": "Command to start CTM server. Default uses pip/pipx installed package. For local development, set to 'uv'.",
+          "default": "python"
         },
         "ctm.serverArgs": {
           "type": "array",
-          "description": "Arguments for CTM server command",
+          "description": "Arguments for CTM server command. Default uses pip/pipx package. For local development with uv, use ['run', 'ctm-server'].",
           "default": [
-            "run",
-            "ctm-server"
+            "-m",
+            "ctm_mcp_server.stdio_server"
           ]
         },
         "ctm.serverPath": {
           "type": "string",
-          "description": "Working directory for CTM server (path to CTM repository). Leave empty to auto-detect.",
+          "description": "Working directory for CTM server (only needed for local development). Leave empty for pip/pipx package. Set to repo path for local development.",
           "default": ""
         },
         "ctm.githubToken": {

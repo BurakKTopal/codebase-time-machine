@@ -17,14 +17,41 @@ Codebase Time Machine (CTM) is an LLM-agnostic tool server for code history anal
 
 ### Installation
 
-```bash
-# Install with uv (recommended)
-uv pip install codebase-time-machine
+**Recommended: PyPI Installation**
 
-# Or clone and install
-git clone https://github.com/burak/codebase-time-machine
+For end users, install via pip or pipx (no uv required):
+
+```bash
+# Option A: pip (simplest)
+pip install codebase-time-machine
+
+# Option B: pipx (isolated installation)
+pipx install codebase-time-machine
+
+# Verify installation
+ctm-server --version
+```
+
+**Alternative: Local Development**
+
+For contributors and development:
+
+```bash
+# Clone the repository
+git clone https://github.com/burakktopal/codebase-time-machine.git
 cd codebase-time-machine
+
+# Install uv if you don't have it
+# macOS/Linux:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows:
+# powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Install dependencies
 uv sync
+
+# Run server
+uv run ctm-server
 ```
 
 ### Set up GitHub token (optional, for private repos)
@@ -33,17 +60,57 @@ uv sync
 export GITHUB_TOKEN=your_token_here
 ```
 
-### Run the MCP Server
+### Usage with Claude Desktop
 
-```bash
-# Start the MCP server
-ctm-server
+After installation via pip/pipx, configure Claude Desktop:
+
+**Config location**:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+**Configuration**:
+```json
+{
+  "mcpServers": {
+    "codebase-time-machine": {
+      "command": "ctm-server",
+      "env": {
+        "GITHUB_TOKEN": "your_github_token_here"
+      }
+    }
+  }
+}
 ```
+
+**For local development** (if using cloned repo):
+```json
+{
+  "mcpServers": {
+    "codebase-time-machine": {
+      "command": "uv",
+      "args": ["run", "ctm-server"],
+      "cwd": "/absolute/path/to/codebase-time-machine",
+      "env": {
+        "GITHUB_TOKEN": "your_github_token_here"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after updating the config.
 
 ### VSCode Extension
 
+The VS Code extension automatically detects your installation method:
+- **pip/pipx install** → Runs `ctm-server` directly
+- **uv tool install** → Runs `uv tool run ctm-server`
+- **Local repo** → Runs `uv run ctm-server` in repo directory
+
+**Setup**:
 1. Install the extension from the `extensions/vscode` folder
-2. Configure your Anthropic API key in VSCode settings (`ctm.anthropicApiKey`)
+2. Configure your AI provider settings (Anthropic, OpenAI, or Gemini)
 3. Select code in your editor
 4. Run command: "CTM: Why Does This Code Exist?"
 
@@ -96,4 +163,6 @@ uv run pytest
 
 ## License
 
-MIT
+AGPL-3.0 - See [LICENSE](LICENSE) for details.
+
+Copyright (C) 2024 Burak Kucuktopal

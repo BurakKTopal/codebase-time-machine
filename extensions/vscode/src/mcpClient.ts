@@ -22,13 +22,17 @@ export class MCPClient {
 
         try {
             const config = vscode.workspace.getConfiguration('ctm');
-            let serverCommand = config.get<string>('serverCommand', 'uv');
-            let serverArgs = config.get<string[]>('serverArgs', ['run', 'ctm-server']);
             const serverPath = config.get<string>('serverPath', '');
             const githubToken = config.get<string>('githubToken', '');
-            let workingDirectory: string | undefined;
 
-            // Determine working directory
+            // Auto-detect server installation or use manual config
+            const detectionResult = await this.detectServerCommand(config, serverPath);
+
+            let serverCommand = detectionResult.command;
+            let serverArgs = detectionResult.args;
+            let workingDirectory = detectionResult.workingDirectory;
+
+            // Override with manual serverPath if provided
             if (serverPath) {
                 workingDirectory = serverPath;
             } else {
@@ -208,5 +212,77 @@ proc.on('exit', code => {
 
     isConnected(): boolean {
         return this.connected;
+    }
+
+    private async detectServerCommand(
+        config: vscode.WorkspaceConfiguration,
+        serverPath: string
+    ): Promise<{ command: string; args: string[]; workingDirectory?: string }> {
+        const { execSync } = require('child_process');
+        const fs = require('fs');
+        const path = require('path');
+
+        // Option 1: User manually configured serverCommand
+        const manualCommand = config.get<string>('serverCommand');
+        if (manualCommand && manualCommand !== 'uv') {
+            console.log('[CTM] Using manually configured command:', manualCommand);
+            return {
+                command: manualCommand,
+                args: config.get<string[]>('serverArgs', ['ctm-server']),
+                workingDirectory: undefined
+            };
+        }
+
+        // Option 2: Check if ctm-server is in PATH (pip/pipx install)
+        try {
+            execSync('ctm-server --version', { stdio: 'ignore' });
+            console.log('[CTM] Detected pip/pipx installation (ctm-server in PATH)');
+            return {
+                command: 'ctm-server',
+                args: [],
+                workingDirectory: undefined
+            };
+        } catch {
+            // Not in PATH, continue checking other methods
+        }
+
+        // Option 3: Check for local repo with uv
+        if (serverPath) {
+            const pyprojectPath = path.join(serverPath, 'pyproject.toml');
+            if (fs.existsSync(pyprojectPath)) {
+                const pyproject = fs.readFileSync(pyprojectPath, 'utf-8');
+                if (pyproject.includes('ctm-server')) {
+                    console.log('[CTM] Detected local repo with uv at:', serverPath);
+                    return {
+                        command: 'uv',
+                        args: ['run', 'ctm-server'],
+                        workingDirectory: serverPath
+                    };
+                }
+            }
+        }
+
+        // Option 4: Try uv tool install (global)
+        try {
+            const uvToolList = execSync('uv tool list', { encoding: 'utf-8', stdio: 'pipe' });
+            if (uvToolList.includes('codebase-time-machine')) {
+                console.log('[CTM] Detected uv tool installation');
+                return {
+                    command: 'uv',
+                    args: ['tool', 'run', 'ctm-server'],
+                    workingDirectory: undefined
+                };
+            }
+        } catch {
+            // uv not available or tool not installed
+        }
+
+        // Fallback: default to uv run (will show error if not installed)
+        console.log('[CTM] No installation detected, falling back to uv run');
+        return {
+            command: 'uv',
+            args: ['run', 'ctm-server'],
+            workingDirectory: undefined
+        };
     }
 }

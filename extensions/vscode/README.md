@@ -23,36 +23,50 @@ Select any code, right-click, and get AI-powered explanations including commit c
 
 Before installing the extension, you need:
 
-### 1. uv (Python Package Manager)
+### 1. Codebase Time Machine Server
 
-The extension uses `uv` to run the CTM MCP server.
-
-**macOS / Linux:**
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**Windows (PowerShell):**
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Verify installation:
-```bash
-uv --version
-```
-
-### 2. Codebase Time Machine Server
-
-Clone and set up the CTM repository:
+**Recommended: Install from PyPI (no uv required)**
 
 ```bash
-# Clone the repository
-git clone https://github.com/burak/codebase-time-machine.git
+# Option A: pip (simplest)
+pip install codebase-time-machine
+
+# Option B: pipx (isolated)
+pipx install codebase-time-machine
+```
+
+The extension uses the installed package by default (`python -m ctm_mcp_server.stdio_server`).
+
+**For Local Development Only**
+
+If you're contributing to CTM development:
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh  # macOS/Linux
+# or
+# powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
+
+# Clone repository
+git clone https://github.com/burakktopal/codebase-time-machine.git
 cd codebase-time-machine
-
-# Install dependencies
 uv sync
+
+# Configure VS Code settings:
+# ctm.serverCommand: "uv"
+# ctm.serverArgs: ["run", "ctm-server"]
+# ctm.serverPath: "/absolute/path/to/codebase-time-machine"
+```
+
+**Summary**:
+- ✅ **Most users**: Install with pip/pipx (default configuration)
+- 🛠️ **Developers**: Use local repo with uv (requires manual configuration)
+
+### 2. Python
+
+You need Python 3.8 or higher. Check with:
+```bash
+python --version
 ```
 
 ### 3. Git
@@ -68,9 +82,9 @@ You need an API key from one of these providers:
 
 | Provider | Get API Key | Models Available |
 |----------|-------------|------------------|
-| **Anthropic** | https://console.anthropic.com/ | Claude Haiku, Sonnet, Opus |
-| **OpenAI** | https://platform.openai.com/api-keys | GPT-4o, GPT-4.1, o1, o3 |
-| **Google** | https://aistudio.google.com/apikey | Gemini 2.0/2.5/3 Flash & Pro |
+| **Anthropic** | https://console.anthropic.com/ | Claude Haiku 3.5, Sonnet 4.5, Opus 4.5 |
+| **OpenAI** | https://platform.openai.com/api-keys | GPT-4.1 Nano, GPT-4.1, o1 |
+| **Google** | https://aistudio.google.com/apikey | Gemini 2.0 Flash-Lite, 2.5 Flash, 3 Pro |
 
 ### 5. GitHub Token (Optional but Recommended)
 
@@ -112,7 +126,9 @@ Open VS Code Settings (Ctrl+, or Cmd+,) and search for "CTM":
 |---------|---------|-------------|
 | `ctm.model` | `claude-3-5-haiku-20241022` | Model ID (must match your provider) |
 | `ctm.maxToolCalls` | `12` | Max tool calls per investigation (3-25) |
-| `ctm.serverPath` | *(auto-detect)* | Path to CTM repository |
+| `ctm.serverCommand` | `python` | Command to run server (use `uv` for local dev) |
+| `ctm.serverArgs` | `["-m", "ctm_mcp_server.stdio_server"]` | Server args (use `["run", "ctm-server"]` for uv) |
+| `ctm.serverPath` | *(empty)* | Path to local CTM repo (only for local dev) |
 | `ctm.githubToken` | *(empty)* | GitHub token for private repos |
 
 ### Available Models

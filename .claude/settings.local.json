@@ -37,7 +37,11 @@
       "Bash(npm test:*)",
       "Bash(cp:*)",
       "Bash(cat:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(ctm-server:*)",
+      "Bash(fresh_test_env/Scripts/python -m ctm_mcp_server.stdio_server:*)",
+      "Bash(fresh_test_env/Scripts/python:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
