@@ -436,9 +436,15 @@ export class ContextPanel {
     <div class="section pr">
         <h2>Pull Request #${context.pull_request.number}</h2>
         <p><strong>${this.escapeHtml(context.pull_request.title || 'Untitled')}</strong></p>
+        ${context.pull_request.author ? `<p class="metadata">By: ${this.escapeHtml(context.pull_request.author)}</p>` : ''}
         ${context.pull_request.body ? `<p>${this.escapeHtml(context.pull_request.body.slice(0, 300))}${context.pull_request.body.length > 300 ? '...' : ''}</p>` : ''}
         ${context.pull_request.html_url ? `<p><a href="${context.pull_request.html_url}">View on GitHub</a></p>` : ''}
-        <p class="metadata">Merged: ${context.pull_request.merged_at ? new Date(context.pull_request.merged_at).toLocaleDateString() : 'Not merged'}</p>
+        <p class="metadata">State: ${context.pull_request.state ?
+            (context.pull_request.state === 'merged' ? `✓ Merged${context.pull_request.merged_at ? ' on ' + new Date(context.pull_request.merged_at).toLocaleDateString() : ''}` :
+             context.pull_request.state === 'closed' ? '✗ Closed (not merged)' :
+             context.pull_request.state === 'open' ? '○ Open' :
+             this.escapeHtml(context.pull_request.state))
+        : 'Unknown'}</p>
     </div>
     ` : ''}
 
@@ -446,9 +452,14 @@ export class ContextPanel {
     <div class="section issue">
         <h2>Issue #${issue.number}</h2>
         <p><strong>${this.escapeHtml(issue.title || 'Untitled')}</strong></p>
+        ${issue.author ? `<p class="metadata">By: ${this.escapeHtml(issue.author)}</p>` : ''}
         ${issue.body ? `<p>${this.escapeHtml(issue.body.slice(0, 300))}${issue.body.length > 300 ? '...' : ''}</p>` : ''}
         ${issue.html_url ? `<p><a href="${issue.html_url}">View on GitHub</a></p>` : ''}
-        <p class="metadata">State: ${issue.state || 'unknown'}</p>
+        <p class="metadata">State: ${issue.state ?
+            (issue.state === 'closed' ? '✓ Closed' :
+             issue.state === 'open' ? '○ Open' :
+             this.escapeHtml(issue.state))
+        : 'Unknown'}</p>
     </div>
     `).join('') : ''}
 

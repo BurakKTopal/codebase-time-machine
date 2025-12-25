@@ -405,42 +405,73 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                     summary: fact.text
                 };
             }
-            if (fact.id.startsWith('pr_') && !fact.id.includes('_reason') && !fact.id.includes('_body') && !fact.id.includes('_discussion')) {
-                if (!context.pull_request) {
+            if (fact.id.startsWith('pr_')) {
+                // Initialize PR object if not exists
+                if (!context.pull_request && !fact.id.includes('_body') && !fact.id.includes('_discussion')) {
                     const match = fact.text.match(/PR #(\d+)/);
                     const prNumber = match ? parseInt(match[1]) : null;
 
-                    // Get URL from evidence
+                    // Get evidence
                     const urlEvidence = evidenceByType['url']?.find(e => e.id.includes(`pr_${prNumber}`));
                     const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(`pr_${prNumber}`));
+                    const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes(`pr_${prNumber}`));
 
-                    // Parse title from fact text: 'PR #123: "Title" by Author'
+                    // Parse from fact text: 'PR #123: "Title" by Author (state)'
                     const titleMatch = fact.text.match(/PR #\d+:\s*"([^"]+)"/);
+                    const stateMatch = fact.text.match(/\(([^)]+)\)$/);
 
                     context.pull_request = {
                         number: prNumber,
                         title: titleMatch?.[1] || null,
                         author: authorEvidence?.verbatim || null,
+                        state: stateMatch?.[1] || null,
                         html_url: urlEvidence?.verbatim || null,
+                        created_at: timestampEvidence?.verbatim || null,
+                        merged_at: null, // Will be set if state is 'merged'
+                        body: null,
                         summary: fact.text
                     };
+
+                    // If state is merged, use created_at as merged_at approximation
+                    if (context.pull_request.state === 'merged') {
+                        context.pull_request.merged_at = context.pull_request.created_at;
+                    }
+                }
+
+                // Handle PR body from separate fact
+                if (fact.id.includes('_body') && context.pull_request) {
+                    const bodyMatch = fact.text.match(/description:\s*(.+)/);
+                    if (bodyMatch) {
+                        context.pull_request.body = bodyMatch[1];
+                    }
                 }
             }
-            if (fact.id.startsWith('issue_') && !fact.id.includes('_desc') && !fact.id.includes('_body')) {
+            if (fact.id.startsWith('issue_')) {
                 if (!context.linked_issues) context.linked_issues = [];
+
+                // Skip body facts - we'll handle them separately
+                if (fact.id.includes('_body') || fact.id.includes('_desc')) {
+                    continue;
+                }
+
                 const match = fact.text.match(/Issue #(\d+)/);
                 const issueNumber = match ? parseInt(match[1]) : null;
 
                 // Get URL from evidence
                 const urlEvidence = evidenceByType['url']?.find(e => e.id.includes(`issue_${issueNumber}`));
+                const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(`issue_${issueNumber}`));
 
-                // Parse title from fact text
+                // Parse from fact text: 'Issue #123: "Title" by Author (state)'
                 const titleMatch = fact.text.match(/Issue #\d+:\s*"([^"]+)"/);
+                const stateMatch = fact.text.match(/\(([^)]+)\)$/);
 
                 context.linked_issues.push({
                     number: issueNumber,
                     title: titleMatch?.[1] || null,
+                    author: authorEvidence?.verbatim || null,
+                    state: stateMatch?.[1] || null,
                     html_url: urlEvidence?.verbatim || null,
+                    body: null, // Will be set from _body fact if it exists
                     summary: fact.text
                 });
             }
