@@ -38,10 +38,14 @@
         "ctm.provider": {
           "type": "string",
           "enum": [
-            "anthropic"
+            "anthropic",
+            "openai",
+            "gemini"
           ],
           "enumDescriptions": [
-            "Anthropic Claude models"
+            "Anthropic Claude models",
+            "OpenAI GPT models",
+            "Google Gemini models"
           ],
           "default": "anthropic",
           "description": "AI provider to use for code analysis"
@@ -61,22 +65,28 @@
           "type": "string",
           "enum": [
             "claude-3-5-haiku-20241022",
-            "claude-haiku-4-5-20251001",
-            "claude-sonnet-4-20250514",
             "claude-sonnet-4-5-20250929",
-            "claude-opus-4-20250514",
-            "claude-opus-4-5-20251101"
+            "claude-opus-4-5-20251101",
+            "gpt-4.1-nano",
+            "gpt-4.1",
+            "o1",
+            "gemini-2.0-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-3-pro"
           ],
           "enumDescriptions": [
-            "Haiku 3.5 - Fast and cost-effective",
-            "Haiku 4.5 - Improved speed and efficiency",
-            "Sonnet 4 - Balanced performance",
-            "Sonnet 4.5 - Enhanced balanced performance",
-            "Opus 4 - Most capable",
-            "Opus 4.5 - Most advanced and intelligent"
+            "[Anthropic] Haiku 3.5 - Fast, cheapest ($0.80/$4)",
+            "[Anthropic] Sonnet 4.5 - Balanced ($3/$15)",
+            "[Anthropic] Opus 4.5 - Most capable ($15/$75)",
+            "[OpenAI] GPT-4.1 Nano - Fastest, cheapest ($0.10/$0.40)",
+            "[OpenAI] GPT-4.1 - Balanced, great for coding ($2/$8)",
+            "[OpenAI] o1 - Advanced reasoning",
+            "[Google] Gemini 2.0 Flash-Lite - Fastest, cheapest ($0.075/$0.30)",
+            "[Google] Gemini 2.5 Flash - Balanced with thinking ($0.15/$0.60)",
+            "[Google] Gemini 3 Pro - Most powerful"
           ],
           "default": "claude-3-5-haiku-20241022",
-          "description": "Model ID from the selected provider"
+          "description": "Model ID from the selected provider."
         },
         "ctm.maxToolCalls": {
           "type": "number",

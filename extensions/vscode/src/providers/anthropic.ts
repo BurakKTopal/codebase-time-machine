@@ -23,37 +23,19 @@ export const CLAUDE_MODELS: LLMModel[] = [
     {
         id: 'claude-3-5-haiku-20241022',
         label: 'Haiku 3.5',
-        description: 'Fast and cost-effective',
-        contextWindow: 200000
-    },
-    {
-        id: 'claude-haiku-4-5-20251001',
-        label: 'Haiku 4.5',
-        description: 'Improved speed and efficiency',
-        contextWindow: 200000
-    },
-    {
-        id: 'claude-sonnet-4-20250514',
-        label: 'Sonnet 4',
-        description: 'Balanced performance',
+        description: 'Fast, cheapest ($0.80/$4)',
         contextWindow: 200000
     },
     {
         id: 'claude-sonnet-4-5-20250929',
         label: 'Sonnet 4.5',
-        description: 'Enhanced balanced performance',
-        contextWindow: 200000
-    },
-    {
-        id: 'claude-opus-4-20250514',
-        label: 'Opus 4',
-        description: 'Most capable',
+        description: 'Balanced ($3/$15)',
         contextWindow: 200000
     },
     {
         id: 'claude-opus-4-5-20251101',
         label: 'Opus 4.5',
-        description: 'Most advanced and intelligent',
+        description: 'Most capable ($15/$75)',
         contextWindow: 200000
     }
 ];

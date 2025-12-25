@@ -9,10 +9,14 @@
 
 import { ILLMProvider, ProviderConfig, LLMModel } from './types';
 import { AnthropicProvider, CLAUDE_MODELS } from './anthropic';
+import { OpenAIProvider, OPENAI_MODELS } from './openai';
+import { GeminiProvider, GEMINI_MODELS } from './gemini';
 
 // Re-export types and providers for convenience
 export * from './types';
 export { AnthropicProvider, CLAUDE_MODELS } from './anthropic';
+export { OpenAIProvider, OPENAI_MODELS } from './openai';
+export { GeminiProvider, GEMINI_MODELS } from './gemini';
 
 /**
  * Provider definition with factory and models
@@ -36,22 +40,16 @@ const PROVIDERS: Record<string, ProviderDefinition> = {
         factory: (config) => new AnthropicProvider(config),
         models: CLAUDE_MODELS,
     },
-    // Future providers:
-    // openai: {
-    //     displayName: 'OpenAI',
-    //     factory: (config) => new OpenAIProvider(config),
-    //     models: OPENAI_MODELS,
-    // },
-    // gemini: {
-    //     displayName: 'Google Gemini',
-    //     factory: (config) => new GeminiProvider(config),
-    //     models: GEMINI_MODELS,
-    // },
-    // ollama: {
-    //     displayName: 'Ollama (Local)',
-    //     factory: (config) => new OllamaProvider(config),
-    //     models: [], // Dynamic - fetched from server
-    // },
+    openai: {
+        displayName: 'OpenAI',
+        factory: (config) => new OpenAIProvider(config),
+        models: OPENAI_MODELS,
+    },
+    gemini: {
+        displayName: 'Google Gemini',
+        factory: (config) => new GeminiProvider(config),
+        models: GEMINI_MODELS,
+    },
 };
 
 /**
