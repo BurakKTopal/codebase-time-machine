@@ -173,27 +173,28 @@ export class FactStore {
             }
         }
 
-        // Handle get_pr
+        // Handle get_pr - data is nested under result.pr
         if (toolName === 'get_pr') {
+            const pr = result.pr || result;
             facts.push({
-                id: `pr_${result.number}`,
-                text: `PR #${result.number}: "${result.title}" by ${result.author} (${result.state})`,
+                id: `pr_${pr.number}`,
+                text: `PR #${pr.number}: "${pr.title}" by ${pr.author} (${pr.state})`,
                 source: toolName,
                 category: 'pr'
             });
-            if (result.body) {
+            if (pr.body) {
                 facts.push({
-                    id: `pr_${result.number}_body`,
-                    text: `PR #${result.number} description: ${result.body.substring(0, 300)}...`,
+                    id: `pr_${pr.number}_body`,
+                    text: `PR #${pr.number} description: ${pr.body.substring(0, 300)}...`,
                     source: toolName,
                     category: 'pr'
                 });
             }
-            if (result.comments && result.comments.length > 0) {
-                const keyComment = result.comments.find((c: any) => c.body && c.body.length > 50);
+            if (pr.comments && pr.comments.length > 0) {
+                const keyComment = pr.comments.find((c: any) => c.body && c.body.length > 50);
                 if (keyComment) {
                     facts.push({
-                        id: `pr_${result.number}_discussion`,
+                        id: `pr_${pr.number}_discussion`,
                         text: `PR discussion: @${keyComment.author}: "${keyComment.body.substring(0, 150)}..."`,
                         source: toolName,
                         category: 'pr'
@@ -202,18 +203,19 @@ export class FactStore {
             }
         }
 
-        // Handle get_issue
+        // Handle get_issue - data is nested under result.issue
         if (toolName === 'get_issue') {
+            const issue = result.issue || result;
             facts.push({
-                id: `issue_${result.number}`,
-                text: `Issue #${result.number}: "${result.title}" by ${result.author} (${result.state})`,
+                id: `issue_${issue.number}`,
+                text: `Issue #${issue.number}: "${issue.title}" by ${issue.author} (${issue.state})`,
                 source: toolName,
                 category: 'issue'
             });
-            if (result.body) {
+            if (issue.body) {
                 facts.push({
-                    id: `issue_${result.number}_body`,
-                    text: `Issue #${result.number} problem: ${result.body.substring(0, 300)}...`,
+                    id: `issue_${issue.number}_body`,
+                    text: `Issue #${issue.number} problem: ${issue.body.substring(0, 300)}...`,
                     source: toolName,
                     category: 'issue'
                 });
@@ -240,15 +242,27 @@ export class FactStore {
             }
         }
 
-        // Handle search_prs_for_commit
-        if (toolName === 'search_prs_for_commit' && result.items && result.items.length > 0) {
-            const pr = result.items[0];
-            facts.push({
-                id: `pr_${pr.number}`,
-                text: `Found PR #${pr.number}: "${pr.title}" by ${pr.author}`,
-                source: toolName,
-                category: 'pr'
-            });
+        // Handle search_prs_for_commit - returns pr_numbers array of integers
+        if (toolName === 'search_prs_for_commit') {
+            const prNumbers = result.pr_numbers || [];
+            if (prNumbers.length > 0) {
+                // Record that we found PRs for this commit
+                facts.push({
+                    id: `search_prs_${result.sha?.substring(0, 8)}`,
+                    text: `Commit ${result.sha?.substring(0, 8)} is associated with PR(s): ${prNumbers.map((n: number) => `#${n}`).join(', ')}`,
+                    source: toolName,
+                    category: 'pr'
+                });
+                // Also record individual PR numbers for reference
+                prNumbers.forEach((prNum: number) => {
+                    facts.push({
+                        id: `pr_found_${prNum}`,
+                        text: `Found PR #${prNum} associated with commit ${result.sha?.substring(0, 8)}`,
+                        source: toolName,
+                        category: 'pr'
+                    });
+                });
+            }
         }
 
         // Handle file history - INCLUDE SHAs for each commit
@@ -461,49 +475,51 @@ export class FactStore {
             }
         }
 
-        // Handle get_pr
+        // Handle get_pr - data is nested under result.pr
         if (toolName === 'get_pr') {
-            if (result.author) {
+            const pr = result.pr || result;
+            if (pr.author) {
                 evidence.push({
-                    id: `author_pr_${result.number}`,
+                    id: `author_pr_${pr.number}`,
                     type: 'author',
-                    verbatim: typeof result.author === 'string' ? result.author : result.author.login,
+                    verbatim: typeof pr.author === 'string' ? pr.author : pr.author.login,
                     source: toolName
                 });
             }
-            if (result.html_url) {
+            if (pr.html_url) {
                 evidence.push({
-                    id: `url_pr_${result.number}`,
+                    id: `url_pr_${pr.number}`,
                     type: 'url',
-                    verbatim: result.html_url,
+                    verbatim: pr.html_url,
                     source: toolName
                 });
             }
-            if (result.created_at) {
+            if (pr.created_at) {
                 evidence.push({
-                    id: `timestamp_pr_${result.number}`,
+                    id: `timestamp_pr_${pr.number}`,
                     type: 'timestamp',
-                    verbatim: result.created_at,
+                    verbatim: pr.created_at,
                     source: toolName
                 });
             }
         }
 
-        // Handle get_issue
+        // Handle get_issue - data is nested under result.issue
         if (toolName === 'get_issue') {
-            if (result.author) {
+            const issue = result.issue || result;
+            if (issue.author) {
                 evidence.push({
-                    id: `author_issue_${result.number}`,
+                    id: `author_issue_${issue.number}`,
                     type: 'author',
-                    verbatim: typeof result.author === 'string' ? result.author : result.author.login,
+                    verbatim: typeof issue.author === 'string' ? issue.author : issue.author.login,
                     source: toolName
                 });
             }
-            if (result.html_url) {
+            if (issue.html_url) {
                 evidence.push({
-                    id: `url_issue_${result.number}`,
+                    id: `url_issue_${issue.number}`,
                     type: 'url',
-                    verbatim: result.html_url,
+                    verbatim: issue.html_url,
                     source: toolName
                 });
             }

@@ -128,6 +128,7 @@ class GitHubClient:
         self,
         method: str,
         path: str,
+        extra_headers: dict | None = None,
         **kwargs,
     ) -> dict | list:
         """Make an API request.
@@ -135,6 +136,7 @@ class GitHubClient:
         Args:
             method: HTTP method.
             path: API path.
+            extra_headers: Additional headers to merge with default headers.
             **kwargs: Additional arguments for httpx.
 
         Returns:
@@ -144,6 +146,10 @@ class GitHubClient:
             GitHubClientError: On API errors.
         """
         async with self._get_client() as client:
+            # Merge extra headers if provided
+            if extra_headers:
+                kwargs["headers"] = {**kwargs.get("headers", {}), **extra_headers}
+
             response = await client.request(method, path, **kwargs)
 
             if response.status_code == 404:
@@ -418,24 +424,47 @@ class GitHubClient:
         return comments
 
     async def search_prs_for_commit(self, sha: str) -> list[int]:
-        """Search for PRs that include a commit.
+        """Find PRs that contain a specific commit.
+
+        Uses the GitHub API endpoint /repos/{owner}/{repo}/commits/{sha}/pulls
+        which returns only PRs that actually contain the commit (not just mention it).
 
         Args:
-            sha: Commit SHA.
+            sha: Commit SHA (full or abbreviated).
 
         Returns:
-            List of PR numbers.
+            List of PR numbers that contain this commit.
         """
         # Check cache first
         cached = self._cache_get("github:search_prs_for_commit", sha)
         if cached is not None:
             return cached
 
-        # GitHub search API
-        query = f"repo:{self.owner}/{self.repo} type:pr {sha}"
-        data = await self._request("GET", "/search/issues", params={"q": query, "per_page": 10})
+        try:
+            # Use the proper GitHub API endpoint that returns PRs containing the commit
+            # This is more reliable than the search API which returns text matches
+            data = await self._request(
+                "GET",
+                self._repo_path(f"/commits/{sha}/pulls"),
+                # Need to specify the preview header for this endpoint
+                extra_headers={"Accept": "application/vnd.github.groot-preview+json"}
+            )
 
-        result = [item.get("number") for item in data.get("items", [])]
+            # Extract PR numbers from the response
+            result = [pr.get("number") for pr in data if pr.get("number")]
+
+        except GitHubNotFoundError:
+            # Commit not found in repo - return empty list
+            result = []
+        except GitHubClientError:
+            # Fallback to search API for other errors (e.g., rate limit issues)
+            # This is less reliable but better than nothing
+            try:
+                query = f"repo:{self.owner}/{self.repo} type:pr {sha}"
+                data = await self._request("GET", "/search/issues", params={"q": query, "per_page": 10})
+                result = [item.get("number") for item in data.get("items", [])]
+            except Exception:
+                result = []
 
         # Cache before returning
         self._cache_set("github:search_prs_for_commit", sha, value=result, ttl=self.TTL_VOLATILE)
