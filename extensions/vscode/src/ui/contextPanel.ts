@@ -1,9 +1,23 @@
 import * as vscode from 'vscode';
 
+export type FollowUpHandler = (question: string) => Promise<string>;
+
 export class ContextPanel {
     private panel: vscode.WebviewPanel | undefined;
+    private onFollowUp: FollowUpHandler | undefined;
+    private conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 
-    show(summary: string, rawContext: any, extensionUri: vscode.Uri): void {
+    /**
+     * Set the handler for follow-up questions
+     */
+    setFollowUpHandler(handler: FollowUpHandler): void {
+        this.onFollowUp = handler;
+    }
+
+    show(summary: string, rawContext: any, _extensionUri: vscode.Uri): void {
+        // Reset conversation history for new investigation
+        this.conversationHistory = [];
+
         if (this.panel) {
             this.panel.reveal(vscode.ViewColumn.Beside);
         } else {
@@ -19,10 +33,60 @@ export class ContextPanel {
 
             this.panel.onDidDispose(() => {
                 this.panel = undefined;
+                this.onFollowUp = undefined;
             });
+
+            // Set up message handler
+            this.panel.webview.onDidReceiveMessage(
+                async (message) => {
+                    if (message.command === 'followUp' && this.onFollowUp) {
+                        const question = message.question;
+                        console.log('[ContextPanel] Received follow-up question:', question);
+
+                        // Add user question to history
+                        this.conversationHistory.push({ role: 'user', content: question });
+
+                        // Show loading state
+                        this.updateConversation(true);
+
+                        try {
+                            // Get answer from agent
+                            const answer = await this.onFollowUp(question);
+
+                            // Add answer to history
+                            this.conversationHistory.push({ role: 'assistant', content: answer });
+
+                            // Update UI
+                            this.updateConversation(false);
+                        } catch (error) {
+                            console.error('[ContextPanel] Follow-up error:', error);
+                            const errorMsg = error instanceof Error ? error.message : String(error);
+                            this.conversationHistory.push({
+                                role: 'assistant',
+                                content: `Error: ${errorMsg}`
+                            });
+                            this.updateConversation(false);
+                        }
+                    }
+                }
+            );
         }
 
         this.panel.webview.html = this.getHtmlContent(summary, rawContext);
+    }
+
+    /**
+     * Update the conversation section without rebuilding the entire panel
+     */
+    private updateConversation(isLoading: boolean): void {
+        if (!this.panel) return;
+
+        // Send message to webview to update conversation
+        this.panel.webview.postMessage({
+            command: 'updateConversation',
+            history: this.conversationHistory,
+            isLoading: isLoading
+        });
     }
 
     private getHtmlContent(summary: string, context: any): string {
@@ -132,6 +196,85 @@ export class ContextPanel {
         li {
             margin: 5px 0;
         }
+        .follow-up-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--vscode-panel-border);
+        }
+        .follow-up-section h2 {
+            margin-bottom: 15px;
+        }
+        #conversation {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+        .message {
+            margin-bottom: 12px;
+            padding: 10px 12px;
+            border-radius: 6px;
+        }
+        .user-message {
+            background: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border);
+            margin-left: 20px;
+        }
+        .assistant-message {
+            background: var(--vscode-textBlockQuote-background);
+            border-left: 3px solid var(--vscode-textLink-foreground);
+            margin-right: 20px;
+        }
+        .message-header {
+            font-size: 0.85em;
+            font-weight: bold;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 5px;
+        }
+        .message-content {
+            line-height: 1.5;
+        }
+        .message-content.loading {
+            color: var(--vscode-descriptionForeground);
+            font-style: italic;
+        }
+        .input-container {
+            display: flex;
+            gap: 8px;
+        }
+        #followUpInput {
+            flex: 1;
+            padding: 8px 12px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: inherit;
+        }
+        #followUpInput:focus {
+            outline: none;
+            border-color: var(--vscode-focusBorder);
+        }
+        #followUpInput:disabled {
+            opacity: 0.6;
+        }
+        #sendButton {
+            padding: 8px 16px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: inherit;
+        }
+        #sendButton:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
+        #sendButton:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -196,9 +339,110 @@ export class ContextPanel {
     </div>
     ` : ''}
 
+    <div class="follow-up-section">
+        <h2>Follow-up Questions</h2>
+        <div id="conversation"></div>
+        <div class="input-container">
+            <input type="text" id="followUpInput" placeholder="Ask a follow-up question..." />
+            <button id="sendButton">Send</button>
+        </div>
+    </div>
+
     <div class="metadata" style="margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--vscode-panel-border);">
         <p>Powered by <a href="https://github.com/burak/codebase-time-machine">Codebase Time Machine</a></p>
     </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        const input = document.getElementById('followUpInput');
+        const sendButton = document.getElementById('sendButton');
+        const conversation = document.getElementById('conversation');
+
+        function sendQuestion() {
+            const question = input.value.trim();
+            if (!question) return;
+
+            // Disable input while processing
+            input.disabled = true;
+            sendButton.disabled = true;
+
+            // Send to extension
+            vscode.postMessage({
+                command: 'followUp',
+                question: question
+            });
+
+            // Clear input
+            input.value = '';
+        }
+
+        // Send on button click
+        sendButton.addEventListener('click', sendQuestion);
+
+        // Send on Enter key
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendQuestion();
+            }
+        });
+
+        // Handle messages from extension
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            if (message.command === 'updateConversation') {
+                updateConversation(message.history, message.isLoading);
+            }
+        });
+
+        function updateConversation(history, isLoading) {
+            let html = '';
+
+            for (const msg of history) {
+                const roleClass = msg.role === 'user' ? 'user-message' : 'assistant-message';
+                const roleLabel = msg.role === 'user' ? 'You' : 'CTM';
+                const content = convertMarkdownToHtml(msg.content);
+                html += '<div class="message ' + roleClass + '">';
+                html += '<div class="message-header">' + roleLabel + '</div>';
+                html += '<div class="message-content">' + content + '</div>';
+                html += '</div>';
+            }
+
+            if (isLoading) {
+                html += '<div class="message assistant-message">';
+                html += '<div class="message-header">CTM</div>';
+                html += '<div class="message-content loading">Investigating...</div>';
+                html += '</div>';
+            }
+
+            conversation.innerHTML = html;
+
+            // Scroll to bottom
+            conversation.scrollTop = conversation.scrollHeight;
+
+            // Re-enable input if not loading
+            if (!isLoading) {
+                input.disabled = false;
+                sendButton.disabled = false;
+                input.focus();
+            }
+        }
+
+        function convertMarkdownToHtml(text) {
+            if (!text) return '';
+            let html = text;
+            // Bold
+            html = html.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
+            // Italic
+            html = html.replace(/\\*(.*?)\\*/g, '<em>$1</em>');
+            // Code blocks
+            html = html.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, '<pre><code>$1</code></pre>');
+            // Inline code
+            html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+            // Line breaks
+            html = html.replace(/\\n/g, '<br>');
+            return html;
+        }
+    </script>
 </body>
 </html>`;
     }

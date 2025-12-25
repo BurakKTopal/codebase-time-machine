@@ -35,7 +35,8 @@
       "Bash(code --install-extension:*)",
       "Bash(npm install:*)",
       "Bash(npm test:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(cat:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

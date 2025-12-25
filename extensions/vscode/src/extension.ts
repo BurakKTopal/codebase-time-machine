@@ -5,6 +5,9 @@ import { ContextPanel } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
 
 let mcpClient: MCPClient | null = null;
+let currentAgent: CTMAgent | null = null;
+let currentPanel: ContextPanel | null = null;
+let currentSummary: string = '';
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Codebase Time Machine extension activated');
@@ -203,8 +206,25 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 rawContext.line_end = endLine;
             }
 
-            const panel = new ContextPanel();
-            panel.show(summary, rawContext, context.extensionUri);
+            // Store agent and summary for follow-up questions
+            currentAgent = agent;
+            currentSummary = summary;
+
+            // Create or reuse panel
+            if (!currentPanel) {
+                currentPanel = new ContextPanel();
+            }
+
+            // Set up follow-up handler
+            currentPanel.setFollowUpHandler(async (question: string) => {
+                if (!currentAgent) {
+                    throw new Error('No active investigation to follow up on');
+                }
+                console.log('[CTM] Processing follow-up question:', question);
+                return await currentAgent.askFollowUp(question, currentSummary);
+            });
+
+            currentPanel.show(summary, rawContext, context.extensionUri);
 
             progress.report({ increment: 100, message: "Done!" });
             console.log('[CTM] ========== Analysis Complete ==========');
