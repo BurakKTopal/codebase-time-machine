@@ -26,7 +26,6 @@ export class MCPClient {
             let serverArgs = config.get<string[]>('serverArgs', ['run', 'ctm-server']);
             const serverPath = config.get<string>('serverPath', '');
             const githubToken = config.get<string>('githubToken', '');
-            const showServerWindow = config.get<boolean>('showServerWindow', false);
             let workingDirectory: string | undefined;
 
             // Determine working directory
@@ -81,7 +80,7 @@ console.log('');
 const proc = spawn('${serverCommand}', ${JSON.stringify(serverArgs)}, {
     cwd: '${workingDirectory.replace(/\\/g, '\\\\')}',
     stdio: 'inherit',
-    windowsHide: ${!showServerWindow}
+    windowsHide: true
 });
 
 proc.on('exit', code => {
@@ -115,7 +114,6 @@ proc.on('exit', code => {
             console.log('[CTM] Starting MCP server with command:', serverCommand);
             console.log('[CTM] Arguments:', serverArgs);
             console.log('[CTM] Full command:', `${serverCommand} ${serverArgs.join(' ')}`);
-            console.log('[CTM] Server window visibility:', showServerWindow ? 'VISIBLE (for debugging)' : 'HIDDEN (background)');
             if (workingDirectory) {
                 console.log('[CTM] Working directory:', workingDirectory);
             }

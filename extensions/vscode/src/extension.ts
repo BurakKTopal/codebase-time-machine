@@ -3,6 +3,7 @@ import { MCPClient } from './mcpClient';
 import { CTMAgent, ProgressUpdate, InvestigationState, InvestigationResult } from './agent';
 import { ContextPanel, ProgressCallback } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
+import { DEFAULT_MODEL } from './constants';
 
 let mcpClient: MCPClient | null = null;
 let currentAgent: CTMAgent | null = null;
@@ -155,14 +156,16 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 console.log('[CTM] Already connected to MCP server (reusing connection)');
             }
 
-            // Step 4: Get API key
+            // Step 4: Get API key and model
             progress.report({ increment: 40, message: "Checking configuration..." });
-            console.log('[CTM] Step 4: Getting Anthropic API key');
+            console.log('[CTM] Step 4: Getting Anthropic API key and model');
             const config = vscode.workspace.getConfiguration('ctm');
             const apiKey = config.get<string>('anthropicApiKey', '');
             if (!apiKey) {
                 throw new Error('Anthropic API key not configured. Please set it in VS Code settings (ctm.anthropicApiKey)');
             }
+            const model = config.get<string>('model', DEFAULT_MODEL);
+            console.log('[CTM] Using model:', model);
 
             // Step 5: Run agent investigation
             progress.report({ increment: 50, message: "Starting agent investigation..." });
@@ -175,7 +178,8 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 filePath: filePath,
                 lineStart: startLine,
                 lineEnd: endLine,
-                branch: currentBranch
+                branch: currentBranch,
+                model: model
             });
 
             // Set up progress callback for real-time updates

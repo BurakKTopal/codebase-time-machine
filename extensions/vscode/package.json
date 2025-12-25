@@ -40,6 +40,27 @@
           "description": "Anthropic API key for AI summaries (get one at https://console.anthropic.com/)",
           "default": ""
         },
+        "ctm.model": {
+          "type": "string",
+          "enum": [
+            "claude-3-5-haiku-20241022",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-20250514",
+            "claude-opus-4-5-20251101"
+          ],
+          "enumDescriptions": [
+            "Haiku 3.5 - Fast and cost-effective",
+            "Haiku 4.5 - Improved speed and efficiency",
+            "Sonnet 4 - Balanced performance",
+            "Sonnet 4.5 - Enhanced balanced performance",
+            "Opus 4 - Most capable",
+            "Opus 4.5 - Most advanced and intelligent"
+          ],
+          "default": "claude-3-5-haiku-20241022",
+          "description": "Claude model to use for code analysis"
+        },
         "ctm.serverCommand": {
           "type": "string",
           "description": "Command to start CTM server",
@@ -62,11 +83,6 @@
           "type": "string",
           "description": "GitHub Personal Access Token for private repositories and higher rate limits (get one at https://github.com/settings/tokens)",
           "default": ""
-        },
-        "ctm.showServerWindow": {
-          "type": "boolean",
-          "description": "Show the MCP server console window (useful for debugging)",
-          "default": false
         }
       }
     }

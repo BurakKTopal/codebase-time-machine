@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { InvestigationResult } from '../agent';
+import { AVAILABLE_MODELS, DEFAULT_MODEL } from '../constants';
 
 export type ProgressCallback = (message: string, percentage: number) => void;
 export type FollowUpHandler = (question: string, onProgress: ProgressCallback) => Promise<string>;
@@ -53,9 +54,22 @@ export class ContextPanel {
             // Set up message handler
             this.panel.webview.onDidReceiveMessage(
                 async (message) => {
+                    // Handle /model command
+                    if (message.command === 'changeModel') {
+                        console.log('[ContextPanel] Received change model request');
+                        await this.handleModelChange();
+                        return;
+                    }
+
                     if (message.command === 'followUp' && this.onFollowUp) {
                         const question = message.question;
                         console.log('[ContextPanel] Received follow-up question:', question);
+
+                        // Check for /model command
+                        if (question.trim().toLowerCase() === '/model') {
+                            await this.handleModelChange();
+                            return;
+                        }
 
                         // Add user question to history
                         this.conversationHistory.push({ role: 'user', content: question });
@@ -417,20 +431,20 @@ export class ContextPanel {
     </div>
     ` : ''}
 
-    ${context.pull_request ? `
+    ${context.pull_request && context.pull_request.number ? `
     <div class="section pr">
         <h2>Pull Request #${context.pull_request.number}</h2>
-        <p><strong>${this.escapeHtml(context.pull_request.title)}</strong></p>
+        <p><strong>${this.escapeHtml(context.pull_request.title || 'Untitled')}</strong></p>
         ${context.pull_request.body ? `<p>${this.escapeHtml(context.pull_request.body.slice(0, 300))}${context.pull_request.body.length > 300 ? '...' : ''}</p>` : ''}
         ${context.pull_request.html_url ? `<p><a href="${context.pull_request.html_url}">View on GitHub</a></p>` : ''}
         <p class="metadata">Merged: ${context.pull_request.merged_at ? new Date(context.pull_request.merged_at).toLocaleDateString() : 'Not merged'}</p>
     </div>
     ` : ''}
 
-    ${context.linked_issues && context.linked_issues.length > 0 ? context.linked_issues.map((issue: any) => `
+    ${context.linked_issues && context.linked_issues.length > 0 ? context.linked_issues.filter((issue: any) => issue && issue.number).map((issue: any) => `
     <div class="section issue">
         <h2>Issue #${issue.number}</h2>
-        <p><strong>${this.escapeHtml(issue.title)}</strong></p>
+        <p><strong>${this.escapeHtml(issue.title || 'Untitled')}</strong></p>
         ${issue.body ? `<p>${this.escapeHtml(issue.body.slice(0, 300))}${issue.body.length > 300 ? '...' : ''}</p>` : ''}
         ${issue.html_url ? `<p><a href="${issue.html_url}">View on GitHub</a></p>` : ''}
         <p class="metadata">State: ${issue.state || 'unknown'}</p>
@@ -449,7 +463,7 @@ export class ContextPanel {
     </div>
     ` : ''}
 
-    ${!context.pull_request && (!context.linked_issues || context.linked_issues.length === 0) ? `
+    ${(!context.pull_request || !context.pull_request.number) && (!context.linked_issues || context.linked_issues.length === 0) ? `
     <div class="info">
         <p><strong>Note:</strong> Limited Context</p>
         <p>This code doesn't have linked PRs or issues. The context is based on Git history only.</p>
@@ -631,6 +645,45 @@ export class ContextPanel {
         }
 
         return html;
+    }
+
+    /**
+     * Handle /model command - show quick pick to change model
+     */
+    private async handleModelChange(): Promise<void> {
+        const config = vscode.workspace.getConfiguration('ctm');
+        const currentModel = config.get<string>('model', DEFAULT_MODEL);
+
+        // Build quick pick items
+        const items = AVAILABLE_MODELS.map(model => ({
+            label: model.label,
+            description: model.description,
+            detail: model.id === currentModel ? '$(check) Current model' : undefined,
+            id: model.id
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Select Claude model for code analysis',
+            title: 'Change Model'
+        });
+
+        if (selected) {
+            // Update the setting
+            await config.update('model', selected.id, vscode.ConfigurationTarget.Global);
+
+            // Show confirmation in conversation
+            this.conversationHistory.push({
+                role: 'user',
+                content: '/model'
+            });
+            this.conversationHistory.push({
+                role: 'assistant',
+                content: `Model changed to **${selected.label}** (${selected.description}). The new model will be used for the next investigation.`
+            });
+            this.updateConversation(false);
+
+            vscode.window.showInformationMessage(`CTM: Model changed to ${selected.label}`);
+        }
     }
 
     private escapeHtml(text: string): string {

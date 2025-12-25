@@ -1,71 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { MCPClient } from './mcpClient';
 import { FactStore } from './factStore';
+import {
+    AgentConfig,
+    ProgressUpdate,
+    ProgressCallback,
+    InvestigationResult,
+    InvestigationState,
+    AgentPhase
+} from './types';
+import { MAX_TOOL_CALLS, SYNTHESIS_THRESHOLD, CORE_TOOLS } from './constants';
 
-export interface AgentConfig {
-    apiKey: string;
-    owner: string;
-    repo: string;
-    repoPath: string;
-    filePath: string;
-    lineStart: number;
-    lineEnd: number;
-    branch?: string;
-}
-
-// Progress update for UI feedback
-export interface ProgressUpdate {
-    phase: 'investigate' | 'synthesize' | 'complete';
-    toolCallCount: number;
-    maxToolCalls: number;
-    currentTool?: string;
-    message: string;
-    percentage: number;
-}
-
-export type ProgressCallback = (update: ProgressUpdate) => void;
-
-// Export type for use in other modules
-export type { AgentConfig as CTMAgentConfig };
-
-// Investigation result with metadata for continue functionality
-export interface InvestigationResult {
-    summary: string;
-    rawContext: any;
-    completionReason: 'natural' | 'limit_reached' | 'threshold_reached';
-    contextQuality: 'high' | 'medium' | 'low';
-    canContinue: boolean;
-    toolCallsUsed: number;
-    toolsUsed: string[];
-    tokensUsed: number;
-}
-
-// State preserved for continuation
-export interface InvestigationState {
-    summary: string;
-    toolsUsed: string[];
-    rawContext: any;
-    toolCallsUsed: number;
-    tokensUsed: number;
-}
-
-// Configuration - LOWER limits since we're more efficient now
-const MAX_TOOL_CALLS = 8;  // Reduced from 12 - we need fewer calls with better context
-const SYNTHESIS_THRESHOLD = 6;  // Reduced from 8
-
-// Core tools - only send these (not all 35)
-const CORE_TOOLS = [
-    'get_local_line_context',  // Primary tool - gets everything
-    'get_commit',
-    'get_pr',
-    'get_issue',
-    'search_prs_for_commit',
-    'get_github_file_history',
-    'trace_file_history',
-    'get_commit_diff'
-];
-
-type AgentPhase = 'investigate' | 'synthesize';
+// Re-export types for backward compatibility
+export type { AgentConfig, ProgressUpdate, ProgressCallback, InvestigationResult, InvestigationState };
 
 /**
  * CTMAgent - Claude Code Architecture
@@ -84,6 +31,7 @@ export class CTMAgent {
     private progressCallback?: ProgressCallback;
     private systemPrompt: string = '';
     private allTools: Anthropic.Tool[] = [];  // Cached tools
+    private toolResultCache: Map<string, any> = new Map();  // Cache tool results
 
     constructor(mcpClient: MCPClient, config: AgentConfig) {
         this.anthropic = new Anthropic({ apiKey: config.apiKey, dangerouslyAllowBrowser: true });
@@ -117,9 +65,9 @@ export class CTMAgent {
     }
 
     /**
-     * Get tools - configurable: all tools or core tools only
+     * Get tools - defaults to CORE_TOOLS for efficiency
      */
-    private async getToolsForRequest(useAllTools: boolean = true): Promise<Anthropic.Tool[]> {
+    private async getToolsForRequest(useAllTools: boolean = false): Promise<Anthropic.Tool[]> {
         // Load all tools once
         if (this.allTools.length === 0) {
             const mcpTools = await this.mcpClient.listTools();
@@ -132,13 +80,13 @@ export class CTMAgent {
         }
 
         if (useAllTools) {
-            // Use ALL tools for comparison
+            // Use ALL tools (for comparison/debugging)
             console.log(`[CTM Agent] Using ALL ${this.allTools.length} tools`);
             return this.allTools;
         } else {
-            // Filter to core tools only
+            // Filter to core tools only - MUCH smaller schema
             const coreTools = this.allTools.filter(t => CORE_TOOLS.includes(t.name));
-            console.log(`[CTM Agent] Using ${coreTools.length} core tools (not ${this.allTools.length})`);
+            console.log(`[CTM Agent] Using ${coreTools.length} CORE tools (saving ${this.allTools.length - coreTools.length} tool schemas)`);
             return coreTools;
         }
     }
@@ -266,7 +214,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
 
             // Make API call
             const response = await this.anthropic.messages.create({
-                model: 'claude-3-5-haiku-20241022',
+                model: this.config.model,
                 max_tokens: 4000,
                 system: this.systemPrompt,
                 tools: toolsToUse,
@@ -517,7 +465,7 @@ If you can answer from the known facts, do so. If you need more information, use
         // Loop to handle potential tool calls
         while (toolCallCount < MAX_FOLLOWUP_TOOLS) {
             const response = await this.anthropic.messages.create({
-                model: 'claude-3-5-haiku-20241022',
+                model: this.config.model,
                 max_tokens: 2000,
                 system: this.systemPrompt,
                 tools: tools,
@@ -568,7 +516,7 @@ If you can answer from the known facts, do so. If you need more information, use
         // If we hit tool limit without a response, synthesize one
         if (!finalResponse) {
             const synthResponse = await this.anthropic.messages.create({
-                model: 'claude-3-5-haiku-20241022',
+                model: this.config.model,
                 max_tokens: 2000,
                 messages: [{
                     role: 'user',
@@ -614,8 +562,23 @@ If you can answer from the known facts, do so. If you need more information, use
             }
         }
 
+        // Generate cache key from tool name and input
+        const cacheKey = `${toolName}:${JSON.stringify(translatedInput)}`;
+
+        // Check cache first
+        if (this.toolResultCache.has(cacheKey)) {
+            console.log(`[CTM Agent] CACHE HIT for ${toolName}`);
+            return this.toolResultCache.get(cacheKey);
+        }
+
         console.log(`[CTM Agent] Executing ${toolName}`);
         const result = await this.mcpClient.callTool(toolName, translatedInput);
+
+        // Cache the result (only if successful)
+        if (result && !result.error) {
+            this.toolResultCache.set(cacheKey, result);
+            console.log(`[CTM Agent] Cached result for ${toolName} (cache size: ${this.toolResultCache.size})`);
+        }
 
         console.groupCollapsed(`[CTM Agent] Tool result for ${toolName} (click to expand)`);
         console.log(JSON.stringify(result, null, 2));
