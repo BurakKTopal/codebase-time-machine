@@ -117,9 +117,9 @@ export class CTMAgent {
     }
 
     /**
-     * Get tools - only CORE_TOOLS, and track if we've sent them
+     * Get tools - configurable: all tools or core tools only
      */
-    private async getToolsForRequest(): Promise<Anthropic.Tool[]> {
+    private async getToolsForRequest(useAllTools: boolean = true): Promise<Anthropic.Tool[]> {
         // Load all tools once
         if (this.allTools.length === 0) {
             const mcpTools = await this.mcpClient.listTools();
@@ -128,14 +128,19 @@ export class CTMAgent {
                 description: tool.description || `MCP tool: ${tool.name}`,
                 input_schema: tool.inputSchema as Anthropic.Tool.InputSchema
             }));
-            console.log(`[CTM Agent] Loaded ${this.allTools.length} tools, filtering to ${CORE_TOOLS.length} core tools`);
+            console.log(`[CTM Agent] Loaded ${this.allTools.length} total tools`);
         }
 
-        // Filter to core tools only
-        const coreTools = this.allTools.filter(t => CORE_TOOLS.includes(t.name));
-        console.log(`[CTM Agent] Using ${coreTools.length} core tools (not ${this.allTools.length})`);
-
-        return coreTools;
+        if (useAllTools) {
+            // Use ALL tools for comparison
+            console.log(`[CTM Agent] Using ALL ${this.allTools.length} tools`);
+            return this.allTools;
+        } else {
+            // Filter to core tools only
+            const coreTools = this.allTools.filter(t => CORE_TOOLS.includes(t.name));
+            console.log(`[CTM Agent] Using ${coreTools.length} core tools (not ${this.allTools.length})`);
+            return coreTools;
+        }
     }
 
     /**
@@ -478,12 +483,24 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
     }
 
     /**
-     * Ask a follow-up question
+     * Ask a follow-up question - WITH tool support
      */
     async askFollowUp(question: string, previousSummary: string): Promise<string> {
         console.log('[CTM Agent] Processing follow-up question:', question);
+        console.log('[CTM Agent] Current facts:', this.factStore.getFactCount());
+
+        // Get tools for follow-up (same core tools)
+        const tools = await this.getToolsForRequest();
 
         const prompt = `## Follow-up Question
+
+**File:** ${this.config.filePath}
+**Lines:** ${this.config.lineStart}-${this.config.lineEnd}
+**Repository:** ${this.config.owner}/${this.config.repo}
+**Local Path:** ${this.config.repoPath}
+
+**Known Facts:**
+${this.factStore.getFactsSummary()}
 
 **Previous Analysis:**
 ${previousSummary}
@@ -491,16 +508,80 @@ ${previousSummary}
 **User Question:**
 ${question}
 
-Answer based on the previous analysis. Be concise.`;
+If you can answer from the known facts, do so. If you need more information, use a tool to get it.`;
 
-        const response = await this.anthropic.messages.create({
-            model: 'claude-3-5-haiku-20241022',
-            max_tokens: 2000,
-            messages: [{ role: 'user', content: prompt }]
-        });
+        let toolCallCount = 0;
+        const MAX_FOLLOWUP_TOOLS = 3;  // Limit tool calls for follow-ups
+        let finalResponse = '';
 
-        const textContent = response.content.find(block => block.type === 'text');
-        return textContent && textContent.type === 'text' ? textContent.text : 'Unable to process follow-up.';
+        // Loop to handle potential tool calls
+        while (toolCallCount < MAX_FOLLOWUP_TOOLS) {
+            const response = await this.anthropic.messages.create({
+                model: 'claude-3-5-haiku-20241022',
+                max_tokens: 2000,
+                system: this.systemPrompt,
+                tools: tools,
+                messages: [{ role: 'user', content: prompt }]
+            });
+
+            console.log(`[CTM Agent] Follow-up response: input=${response.usage.input_tokens}, output=${response.usage.output_tokens}, stop=${response.stop_reason}`);
+
+            const textContent = response.content.find(block => block.type === 'text');
+            const toolUses = response.content.filter(block => block.type === 'tool_use');
+
+            // If no tool calls, we have our answer
+            if (toolUses.length === 0) {
+                if (textContent && textContent.type === 'text') {
+                    finalResponse = textContent.text;
+                }
+                break;
+            }
+
+            // Handle tool calls
+            for (const toolUse of toolUses) {
+                if (toolUse.type !== 'tool_use') continue;
+
+                toolCallCount++;
+                console.log(`[CTM Agent] Follow-up tool call ${toolCallCount}/${MAX_FOLLOWUP_TOOLS}: ${toolUse.name}`);
+
+                this.reportProgress({
+                    phase: 'investigate',
+                    toolCallCount,
+                    maxToolCalls: MAX_FOLLOWUP_TOOLS,
+                    currentTool: toolUse.name,
+                    message: `Checking ${this.formatToolName(toolUse.name)}...`,
+                    percentage: 30 + (toolCallCount / MAX_FOLLOWUP_TOOLS) * 50
+                });
+
+                // Execute tool
+                const result = await this.executeTool(toolUse.name, toolUse.input);
+
+                // Extract facts (our key optimization)
+                const confirmation = await this.factStore.extractAndStore(toolUse.name, result);
+                console.log(`[CTM Agent] ${confirmation}`);
+            }
+
+            // After tool calls, ask again with updated facts
+            // The next iteration will include the new facts in the prompt
+        }
+
+        // If we hit tool limit without a response, synthesize one
+        if (!finalResponse) {
+            const synthResponse = await this.anthropic.messages.create({
+                model: 'claude-3-5-haiku-20241022',
+                max_tokens: 2000,
+                messages: [{
+                    role: 'user',
+                    content: `Based on these facts, answer the question: "${question}"\n\nFacts:\n${this.factStore.getFactsSummary()}`
+                }]
+            });
+
+            const textContent = synthResponse.content.find(block => block.type === 'text');
+            finalResponse = textContent && textContent.type === 'text' ? textContent.text : 'Unable to find additional information.';
+        }
+
+        console.log(`[CTM Agent] Follow-up complete. Facts: ${this.factStore.getFactCount()}`);
+        return finalResponse;
     }
 
     private formatToolName(toolName: string): string {

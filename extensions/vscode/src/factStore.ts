@@ -75,12 +75,12 @@ export class FactStore {
 
         // Handle get_local_line_context / get_line_context
         if (toolName === 'get_local_line_context' || toolName === 'get_line_context') {
-            // Blame commit
+            // Blame commit - INCLUDE SHA so agent can reference it
             if (result.blame_commit) {
                 const bc = result.blame_commit;
                 facts.push({
                     id: `blame_${bc.sha?.substring(0, 8)}`,
-                    text: `Last touched by ${bc.author} on ${bc.date?.substring(0, 10)}: "${bc.message?.split('\n')[0]?.substring(0, 80)}"`,
+                    text: `Blame commit ${bc.sha}: by ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"`,
                     source: toolName,
                     category: 'commit'
                 });
@@ -125,13 +125,26 @@ export class FactStore {
                 });
             }
 
-            // Historical commits (when code was introduced)
+            // Historical commits (when code was introduced) - INCLUDE SHAs
             if (result.historical_commits && result.historical_commits.length > 0) {
+                // Store all historical commit SHAs so agent can reference them
+                result.historical_commits.forEach((commit: any, idx: number) => {
+                    if (commit.sha) {
+                        facts.push({
+                            id: `history_${commit.sha?.substring(0, 8)}`,
+                            text: `Historical commit ${commit.sha}: by ${commit.author} on ${commit.date?.substring(0, 10)} - "${commit.message?.split('\n')[0]?.substring(0, 60)}"`,
+                            source: toolName,
+                            category: 'commit'
+                        });
+                    }
+                });
+
+                // Mark the oldest as the origin
                 const firstCommit = result.historical_commits[result.historical_commits.length - 1];
                 if (firstCommit) {
                     facts.push({
                         id: `origin_${firstCommit.sha?.substring(0, 8)}`,
-                        text: `Code originally added by ${firstCommit.author} on ${firstCommit.date?.substring(0, 10)}: "${firstCommit.message?.split('\n')[0]?.substring(0, 80)}"`,
+                        text: `ORIGIN commit ${firstCommit.sha}: Code first added by ${firstCommit.author} on ${firstCommit.date?.substring(0, 10)}`,
                         source: toolName,
                         category: 'commit'
                     });
@@ -186,15 +199,24 @@ export class FactStore {
             }
         }
 
-        // Handle get_commit / get_github_commit
+        // Handle get_commit / get_github_commit - INCLUDE FULL SHA
         if (toolName === 'get_commit' || toolName === 'get_github_commit') {
             const commit = result.commit || result;
             facts.push({
                 id: `commit_${commit.sha?.substring(0, 8)}`,
-                text: `Commit ${commit.sha?.substring(0, 8)} by ${commit.author} on ${commit.date?.substring(0, 10)}: "${commit.message?.split('\n')[0]}"`,
+                text: `Commit ${commit.sha}: by ${commit.author?.name || commit.author} on ${commit.authored_date?.substring(0, 10) || commit.date?.substring(0, 10)} - "${commit.message?.split('\n')[0]?.substring(0, 80)}"`,
                 source: toolName,
                 category: 'commit'
             });
+            // Also store PR number if present
+            if (commit.pr_number) {
+                facts.push({
+                    id: `commit_pr_${commit.pr_number}`,
+                    text: `Commit ${commit.sha?.substring(0, 8)} is from PR #${commit.pr_number}`,
+                    source: toolName,
+                    category: 'pr'
+                });
+            }
         }
 
         // Handle search_prs_for_commit
@@ -208,13 +230,24 @@ export class FactStore {
             });
         }
 
-        // Handle file history
+        // Handle file history - INCLUDE SHAs for each commit
         if ((toolName === 'get_github_file_history' || toolName === 'trace_file_history') && result.commits) {
+            // Store individual commit SHAs so agent can use them
+            result.commits.slice(0, 5).forEach((c: any) => {
+                facts.push({
+                    id: `file_commit_${c.sha?.substring(0, 8)}`,
+                    text: `File commit ${c.sha}: "${c.message?.split('\n')[0]?.substring(0, 60)}"`,
+                    source: toolName,
+                    category: 'commit'
+                });
+            });
+
+            // Summary
             facts.push({
-                id: 'file_history',
-                text: `File has ${result.commits.length} commits. Recent: ${result.commits.slice(0, 3).map((c: any) => c.message?.split('\n')[0]?.substring(0, 40)).join('; ')}`,
+                id: 'file_history_summary',
+                text: `File has ${result.commits.length} total commits`,
                 source: toolName,
-                category: 'commit'
+                category: 'other'
             });
         }
 
