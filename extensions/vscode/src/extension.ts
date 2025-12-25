@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { MCPClient } from './mcpClient';
-import { CTMAgent } from './agent';
-import { ContextPanel } from './ui/contextPanel';
+import { CTMAgent, ProgressUpdate } from './agent';
+import { ContextPanel, ProgressCallback } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
 
 let mcpClient: MCPClient | null = null;
@@ -177,6 +177,20 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 branch: currentBranch
             });
 
+            // Set up progress callback for real-time updates
+            let lastPercentage = 50;
+            agent.setProgressCallback((update: ProgressUpdate) => {
+                // Calculate increment from last percentage
+                const increment = Math.max(0, update.percentage - lastPercentage);
+                lastPercentage = update.percentage;
+
+                // Update progress notification with dynamic message
+                progress.report({
+                    increment: increment * 0.4, // Scale to fit within our progress range (50-90%)
+                    message: update.message
+                });
+            });
+
             let summary;
             let rawContext;
             try {
@@ -216,11 +230,17 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
             }
 
             // Set up follow-up handler
-            currentPanel.setFollowUpHandler(async (question: string) => {
+            currentPanel.setFollowUpHandler(async (question: string, onProgress: ProgressCallback) => {
                 if (!currentAgent) {
                     throw new Error('No active investigation to follow up on');
                 }
                 console.log('[CTM] Processing follow-up question:', question);
+
+                // Set up agent progress callback to forward to panel
+                currentAgent.setProgressCallback((update: ProgressUpdate) => {
+                    onProgress(update.message, update.percentage);
+                });
+
                 return await currentAgent.askFollowUp(question, currentSummary);
             });
 

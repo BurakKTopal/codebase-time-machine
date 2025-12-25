@@ -12,6 +12,18 @@ export interface AgentConfig {
     branch?: string;
 }
 
+// Progress update for UI feedback
+export interface ProgressUpdate {
+    phase: 'investigate' | 'synthesize' | 'complete';
+    toolCallCount: number;
+    maxToolCalls: number;
+    currentTool?: string;
+    message: string;
+    percentage: number;
+}
+
+export type ProgressCallback = (update: ProgressUpdate) => void;
+
 // Export type for use in other modules
 export type { AgentConfig as CTMAgentConfig };
 
@@ -27,11 +39,28 @@ export class CTMAgent {
     private mcpClient: MCPClient;
     private config: AgentConfig;
     private conversationHistory: Anthropic.MessageParam[] = [];
+    private progressCallback?: ProgressCallback;
 
     constructor(mcpClient: MCPClient, config: AgentConfig) {
         this.anthropic = new Anthropic({ apiKey: config.apiKey });
         this.mcpClient = mcpClient;
         this.config = config;
+    }
+
+    /**
+     * Set a callback to receive progress updates during investigation
+     */
+    setProgressCallback(callback: ProgressCallback): void {
+        this.progressCallback = callback;
+    }
+
+    /**
+     * Report progress to the callback if set
+     */
+    private reportProgress(update: ProgressUpdate): void {
+        if (this.progressCallback) {
+            this.progressCallback(update);
+        }
     }
 
     async investigate(): Promise<{ summary: string; rawContext: any }> {
@@ -43,6 +72,15 @@ export class CTMAgent {
         // Get available tools from MCP server
         const tools = await this.getAvailableTools();
         console.log('[CTM Agent] Available tools:', tools.length);
+
+        // Report initial progress
+        this.reportProgress({
+            phase: 'investigate',
+            toolCallCount: 0,
+            maxToolCalls: MAX_TOOL_CALLS,
+            message: 'Starting investigation...',
+            percentage: 5
+        });
 
         // FSM state
         let phase: AgentPhase = 'investigate';
@@ -72,6 +110,15 @@ export class CTMAgent {
                 console.log(`[CTM Agent] Tool calls made: ${toolCallCount}/${MAX_TOOL_CALLS}`);
                 console.log(`[CTM Agent] ═══════════════════════════════════════════════════`);
 
+                // Report phase transition
+                this.reportProgress({
+                    phase: 'synthesize',
+                    toolCallCount,
+                    maxToolCalls: MAX_TOOL_CALLS,
+                    message: 'Synthesizing findings...',
+                    percentage: 85
+                });
+
                 // Add synthesis prompt (short, identity-based, no CLAUDE.md)
                 this.conversationHistory.push({
                     role: 'user',
@@ -91,7 +138,7 @@ export class CTMAgent {
 
             // Make API call
             const response = await this.anthropic.messages.create({
-                model: 'claude-haiku-4-5-20251001',
+                model: 'claude-3-5-haiku-20241022',
                 max_tokens: 4000,
                 tools: toolsToUse,
                 messages: messages
@@ -128,6 +175,16 @@ export class CTMAgent {
                 if (textContent && textContent.type === 'text') {
                     finalResponse = textContent.text;
                     console.log(`[CTM Agent] ✓ Synthesis complete: ${finalResponse.length} chars`);
+
+                    // Report completion
+                    this.reportProgress({
+                        phase: 'complete',
+                        toolCallCount,
+                        maxToolCalls: MAX_TOOL_CALLS,
+                        message: 'Analysis complete!',
+                        percentage: 100
+                    });
+
                     break;
                 }
             }
@@ -148,6 +205,17 @@ export class CTMAgent {
                     if (toolUse.type === 'tool_use') {
                         toolCallCount++;
                         console.log(`[CTM Agent] Tool ${toolCallCount}/${MAX_TOOL_CALLS}: ${toolUse.name}`);
+
+                        // Report progress before tool execution
+                        const progressPercentage = Math.min(10 + (toolCallCount / MAX_TOOL_CALLS) * 70, 80);
+                        this.reportProgress({
+                            phase: 'investigate',
+                            toolCallCount,
+                            maxToolCalls: MAX_TOOL_CALLS,
+                            currentTool: toolUse.name,
+                            message: `Calling ${this.formatToolName(toolUse.name)}... (${toolCallCount}/${MAX_TOOL_CALLS})`,
+                            percentage: progressPercentage
+                        });
 
                         const result = await this.executeTool(toolUse.name, toolUse.input);
 
@@ -222,6 +290,16 @@ export class CTMAgent {
                     // Agent finished naturally during investigation
                     finalResponse = textContent.text;
                     console.log(`[CTM Agent] ✓ Natural completion: ${finalResponse.length} chars`);
+
+                    // Report completion
+                    this.reportProgress({
+                        phase: 'complete',
+                        toolCallCount,
+                        maxToolCalls: MAX_TOOL_CALLS,
+                        message: 'Analysis complete!',
+                        percentage: 100
+                    });
+
                     break;
                 }
             }
@@ -278,6 +356,15 @@ Synthesize what you have into a clear, complete answer NOW.`;
         console.log('[CTM Agent] Starting follow-up investigation');
         console.log('[CTM Agent] Question:', question);
 
+        // Report starting
+        this.reportProgress({
+            phase: 'investigate',
+            toolCallCount: 0,
+            maxToolCalls: 5,
+            message: 'Processing follow-up question...',
+            percentage: 10
+        });
+
         // Get available tools
         const tools = await this.getAvailableTools();
 
@@ -318,7 +405,7 @@ Answer the user's follow-up question. You can use the same investigation tools (
             const toolsToUse = iteration >= maxFollowUpIterations ? [] : tools;
 
             const response = await this.anthropic.messages.create({
-                model: 'claude-haiku-4-5-20251001',
+                model: 'claude-3-5-haiku-20241022',
                 max_tokens: 4000,
                 tools: toolsToUse,
                 messages: followUpHistory
@@ -346,9 +433,23 @@ Answer the user's follow-up question. You can use the same investigation tools (
 
                 // Execute tool calls
                 const toolResults: Anthropic.ToolResultBlockParam[] = [];
+                let toolCount = 0;
                 for (const toolUse of toolUses) {
                     if (toolUse.type === 'tool_use') {
+                        toolCount++;
                         console.log('[CTM Agent Follow-up] Executing:', toolUse.name);
+
+                        // Report progress
+                        const progressPercentage = 20 + (iteration / maxFollowUpIterations) * 60;
+                        this.reportProgress({
+                            phase: 'investigate',
+                            toolCallCount: toolCount,
+                            maxToolCalls: 5,
+                            currentTool: toolUse.name,
+                            message: `Calling ${this.formatToolName(toolUse.name)}...`,
+                            percentage: progressPercentage
+                        });
+
                         const result = await this.executeTool(toolUse.name, toolUse.input);
 
                         // Truncate result
@@ -373,6 +474,15 @@ Answer the user's follow-up question. You can use the same investigation tools (
                 if (finalText && finalText.type === 'text') {
                     finalResponse = finalText.text;
                     console.log('[CTM Agent Follow-up] Got final response:', finalResponse.length, 'chars');
+
+                    // Report completion
+                    this.reportProgress({
+                        phase: 'complete',
+                        toolCallCount: 0,
+                        maxToolCalls: 5,
+                        message: 'Done!',
+                        percentage: 100
+                    });
                 }
                 break;
             }
@@ -609,6 +719,33 @@ Investigate this code:
         if (!str) return '';
         if (str.length <= maxLength) return str;
         return str.substring(0, maxLength) + '... [truncated]';
+    }
+
+    /**
+     * Format a tool name for display in progress messages
+     */
+    private formatToolName(toolName: string): string {
+        // Map tool names to human-readable descriptions
+        const toolLabels: Record<string, string> = {
+            'get_local_line_context': 'line context',
+            'get_line_context': 'line context',
+            'get_commit': 'commit details',
+            'get_commit_diff': 'commit diff',
+            'get_github_commit': 'commit details',
+            'get_pr': 'pull request',
+            'get_issue': 'issue',
+            'search_prs_for_commit': 'PR search',
+            'trace_file_history': 'file history',
+            'get_github_file_history': 'file history',
+            'get_github_file': 'file content',
+            'blame_with_context': 'blame info',
+            'explain_file': 'file overview',
+            'get_code_context': 'code context',
+            'get_code_owners': 'code owners',
+            'pickaxe_search': 'code origin search',
+        };
+
+        return toolLabels[toolName] || toolName.replace(/_/g, ' ');
     }
 
     private async executeTool(toolName: string, input: any): Promise<any> {

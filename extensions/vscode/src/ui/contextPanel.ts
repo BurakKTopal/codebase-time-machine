@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
-export type FollowUpHandler = (question: string) => Promise<string>;
+export type ProgressCallback = (message: string, percentage: number) => void;
+export type FollowUpHandler = (question: string, onProgress: ProgressCallback) => Promise<string>;
 
 export class ContextPanel {
     private panel: vscode.WebviewPanel | undefined;
@@ -47,11 +48,16 @@ export class ContextPanel {
                         this.conversationHistory.push({ role: 'user', content: question });
 
                         // Show loading state
-                        this.updateConversation(true);
+                        this.updateConversation(true, 'Processing question...', 10);
 
                         try {
-                            // Get answer from agent
-                            const answer = await this.onFollowUp(question);
+                            // Progress callback to update loading message
+                            const onProgress: ProgressCallback = (progressMessage, percentage) => {
+                                this.updateConversation(true, progressMessage, percentage);
+                            };
+
+                            // Get answer from agent with progress updates
+                            const answer = await this.onFollowUp(question, onProgress);
 
                             // Add answer to history
                             this.conversationHistory.push({ role: 'assistant', content: answer });
@@ -78,14 +84,16 @@ export class ContextPanel {
     /**
      * Update the conversation section without rebuilding the entire panel
      */
-    private updateConversation(isLoading: boolean): void {
+    private updateConversation(isLoading: boolean, loadingMessage?: string, percentage?: number): void {
         if (!this.panel) return;
 
         // Send message to webview to update conversation
         this.panel.webview.postMessage({
             command: 'updateConversation',
             history: this.conversationHistory,
-            isLoading: isLoading
+            isLoading: isLoading,
+            loadingMessage: loadingMessage || 'Investigating...',
+            percentage: percentage || 0
         });
     }
 
@@ -236,6 +244,22 @@ export class ContextPanel {
         .message-content.loading {
             color: var(--vscode-descriptionForeground);
             font-style: italic;
+        }
+        .loading-text {
+            margin-bottom: 8px;
+        }
+        .progress-bar {
+            height: 4px;
+            background: var(--vscode-progressBar-background);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--vscode-progressBar-background);
+            background: linear-gradient(90deg, var(--vscode-textLink-foreground), var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)));
+            transition: width 0.3s ease;
         }
         .input-container {
             display: flex;
@@ -390,11 +414,11 @@ export class ContextPanel {
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (message.command === 'updateConversation') {
-                updateConversation(message.history, message.isLoading);
+                updateConversation(message.history, message.isLoading, message.loadingMessage, message.percentage);
             }
         });
 
-        function updateConversation(history, isLoading) {
+        function updateConversation(history, isLoading, loadingMessage, percentage) {
             let html = '';
 
             for (const msg of history) {
@@ -408,9 +432,16 @@ export class ContextPanel {
             }
 
             if (isLoading) {
+                const displayMessage = loadingMessage || 'Investigating...';
+                const pct = percentage || 0;
                 html += '<div class="message assistant-message">';
                 html += '<div class="message-header">CTM</div>';
-                html += '<div class="message-content loading">Investigating...</div>';
+                html += '<div class="message-content loading">';
+                html += '<div class="loading-text">' + displayMessage + '</div>';
+                if (pct > 0) {
+                    html += '<div class="progress-bar"><div class="progress-fill" style="width: ' + pct + '%"></div></div>';
+                }
+                html += '</div>';
                 html += '</div>';
             }
 
