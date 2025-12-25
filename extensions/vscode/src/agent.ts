@@ -12,7 +12,15 @@ export interface AgentConfig {
     branch?: string;
 }
 
-const maxIterations = 10;
+// Export type for use in other modules
+export type { AgentConfig as CTMAgentConfig };
+
+// Configuration
+const MAX_TOOL_CALLS = 12; // Cap based on actual tool calls, not iterations
+const SYNTHESIS_THRESHOLD = 8; // Switch to synthesis after this many tool calls
+
+// Agent phases - this is a HARD constraint, not advisory
+type AgentPhase = 'investigate' | 'synthesize';
 
 export class CTMAgent {
     private anthropic: Anthropic;
@@ -27,7 +35,7 @@ export class CTMAgent {
     }
 
     async investigate(): Promise<{ summary: string; rawContext: any }> {
-        console.log('[CTM Agent] Starting investigation');
+        console.log('[CTM Agent] Starting investigation (FSM-based control)');
         console.log('[CTM Agent] File:', this.config.filePath);
         console.log('[CTM Agent] Lines:', this.config.lineStart, '-', this.config.lineEnd);
         console.log('[CTM Agent] Branch:', this.config.branch || 'unknown');
@@ -36,180 +44,99 @@ export class CTMAgent {
         const tools = await this.getAvailableTools();
         console.log('[CTM Agent] Available tools:', tools.length);
 
-        // Initial prompt
-        const initialPrompt = this.buildInitialPrompt();
-        console.log('[CTM Agent] Initial prompt length:', initialPrompt.length, 'chars');
-
-        // Run agent loop
+        // FSM state
+        let phase: AgentPhase = 'investigate';
+        let toolCallCount = 0;
         let iteration = 0;
         let finalResponse = '';
         let collectedContext: any = {};
         let totalInputTokens = 0;
         let totalOutputTokens = 0;
 
-        while (iteration < maxIterations) {
+        // Initial prompt includes CLAUDE.md
+        const initialPrompt = this.buildInitialPrompt();
+        console.log('[CTM Agent] Initial prompt length:', initialPrompt.length, 'chars');
+
+        // Add initial user message
+        this.conversationHistory.push({ role: 'user', content: initialPrompt });
+
+        // Main agent loop
+        while (true) {
             iteration++;
-            console.log(`[CTM Agent] Iteration ${iteration}/${maxIterations}`);
 
-            // Build messages array
-            // IMPORTANT: Only add a new user message if the last message in history is NOT already a user message
-            // (After tool results are added, the last message is already a user message)
-            let messages: Anthropic.MessageParam[];
+            // Check phase transition BEFORE making the call
+            if (phase === 'investigate' && toolCallCount >= SYNTHESIS_THRESHOLD) {
+                phase = 'synthesize';
+                console.log(`[CTM Agent] ═══════════════════════════════════════════════════`);
+                console.log(`[CTM Agent] PHASE TRANSITION: investigate → synthesize`);
+                console.log(`[CTM Agent] Tool calls made: ${toolCallCount}/${MAX_TOOL_CALLS}`);
+                console.log(`[CTM Agent] ═══════════════════════════════════════════════════`);
 
-            const lastMessage = this.conversationHistory[this.conversationHistory.length - 1];
-            const needsUserMessage = !lastMessage || lastMessage.role !== 'user';
-
-            if (needsUserMessage) {
-                // First iteration or after Claude's text-only response - add user prompt
-                let userMessage: string;
-
-                if (iteration === 1) {
-                    userMessage = initialPrompt;
-                } else if (iteration >= maxIterations - 1) {
-                    // Final iterations - demand synthesis NOW
-                    userMessage = `<system_reminder>CRITICAL: This is iteration ${iteration} of ${maxIterations}. You are at or near the maximum iteration limit.
-
-You MUST provide your final answer NOW. Do NOT make any more tool calls.
-
-Synthesize everything you have learned so far and provide a complete 3-5 paragraph answer that explains:
-1. What this code is and when it was added
-2. WHY it exists (the problem it solved)
-3. HOW it solves the problem
-4. Any relevant context or recommendations
-
-Use the information you have already gathered. If you don't have all the details, provide the best answer you can with what you know.</system_reminder>\n\nProvide your final answer now. Do not use any tools.`;
-                } else {
-                    // Add iteration reminder
-                    const remaining = maxIterations - iteration;
-                    let reminder = `<system_reminder>Iteration ${iteration}/${maxIterations}. ${remaining} iterations remaining. `;
-
-                    if (iteration >= maxIterations - 3) {
-                        reminder += `You're running low on iterations - start synthesizing your findings and preparing final answer.`;
-                    } else if (iteration >= maxIterations / 2) {
-                        reminder += `Halfway through - ensure you're digging deep, not just gathering surface info.`;
-                    } else {
-                        reminder += `Plenty of iterations left - investigate thoroughly, read diffs, check historical_commits.`;
-                    }
-
-                    reminder += `</system_reminder>\n\nContinue your investigation.`;
-                    userMessage = reminder;
-                }
-
-                console.log('[CTM Agent] Adding new user message to history (last message was assistant or empty)');
-
-                // CRITICAL: Add the user message to conversation history so it's persisted
-                const userMessageParam: Anthropic.MessageParam = { role: 'user', content: userMessage };
-                this.conversationHistory.push(userMessageParam);
-
-                messages = [...this.conversationHistory];
-            } else {
-                // Last message is already user message (tool results) - don't add another
-                console.log('[CTM Agent] Using existing tool_results as user message (not adding duplicate user message)');
-                messages = [...this.conversationHistory];
+                // Add synthesis prompt (short, identity-based, no CLAUDE.md)
+                this.conversationHistory.push({
+                    role: 'user',
+                    content: this.buildSynthesisPrompt()
+                });
             }
 
-            // Calculate message sizes for verification
+            // Hard constraint: tools ONLY in investigate phase
+            const toolsToUse = phase === 'investigate' ? tools : [];
+
+            console.log(`[CTM Agent] Iteration ${iteration} | Phase: ${phase} | Tools: ${toolsToUse.length > 0 ? 'ENABLED' : 'DISABLED'} | Tool calls: ${toolCallCount}`);
+
+            // Build messages
+            const messages = [...this.conversationHistory];
             const messagesSizeChars = JSON.stringify(messages).length;
-            const messagesSizeKB = (messagesSizeChars / 1024).toFixed(2);
-            console.log(`[CTM Agent] Sending ${messages.length} messages to Claude (${messagesSizeChars} chars / ${messagesSizeKB} KB)`);
-            console.log(`[CTM Agent] History: ${this.conversationHistory.length} messages in conversation history`);
+            console.log(`[CTM Agent] Sending ${messages.length} messages (${(messagesSizeChars / 1024).toFixed(1)} KB)`);
 
-            // Log message structure for debugging
-            const messageStructure = messages.map(m => m.role).join(' → ');
-            console.log(`[CTM Agent] Message flow: ${messageStructure}`);
-
-            // Disable tools at final iterations to force synthesis
-            const toolsToUse = iteration >= maxIterations - 1 ? [] : tools;
-            if (toolsToUse.length === 0 && iteration >= maxIterations - 1) {
-                console.log(`[CTM Agent] Tools DISABLED - forcing final synthesis (iteration ${iteration}/${maxIterations})`);
-            }
-
+            // Make API call
             const response = await this.anthropic.messages.create({
-                model: 'claude-3-5-haiku-20241022',
+                model: 'claude-haiku-4-5-20251001',
                 max_tokens: 4000,
                 tools: toolsToUse,
                 messages: messages
             });
 
-            console.log('[CTM Agent] Response stop_reason:', response.stop_reason);
-            console.log('[CTM Agent] Response usage:', response.usage);
+            // Track tokens
+            totalInputTokens += response.usage.input_tokens;
+            totalOutputTokens += response.usage.output_tokens;
+            console.log(`[CTM Agent] Tokens: +${response.usage.input_tokens}/${response.usage.output_tokens} | Total: ${totalInputTokens + totalOutputTokens}`);
 
-            // Track token usage with detailed breakdown
-            const iterationInputTokens = response.usage.input_tokens;
-            const iterationOutputTokens = response.usage.output_tokens;
-            totalInputTokens += iterationInputTokens;
-            totalOutputTokens += iterationOutputTokens;
-
-            console.log(`[CTM Agent] This iteration - Input: ${iterationInputTokens} tokens, Output: ${iterationOutputTokens} tokens`);
-            console.log(`[CTM Agent] CUMULATIVE - Input: ${totalInputTokens}, Output: ${totalOutputTokens}, Total: ${totalInputTokens + totalOutputTokens}`);
-
-            // Estimate chars-to-tokens ratio for verification (roughly 4 chars per token)
-            const estimatedTokens = Math.round(messagesSizeChars / 4);
-            console.log(`[CTM Agent] Verification: ${messagesSizeChars} chars ≈ ${estimatedTokens} estimated tokens vs ${iterationInputTokens} actual input tokens`);
-
-            // Process response
+            // Extract text content
             const textContent = response.content.find(block => block.type === 'text');
-            if (textContent && textContent.type === 'text') {
-                console.log('[CTM Agent] Claude says:', textContent.text.substring(0, 200) + '...');
-            }
-
-            // Handle tool calls
             const toolUses = response.content.filter(block => block.type === 'tool_use');
 
-            console.log(`[CTM Agent] Response content blocks: ${response.content.length} (${response.content.map(b => b.type).join(', ')})`);
+            if (textContent && textContent.type === 'text') {
+                console.log('[CTM Agent] Text response:', textContent.text.substring(0, 150) + '...');
+            }
 
-            if (toolUses.length > 0) {
-                console.log('[CTM Agent] Claude wants to use', toolUses.length, 'tool(s)');
+            // SYNTHESIS PHASE: If we get any text, we're done
+            if (phase === 'synthesize') {
+                if (toolUses.length > 0) {
+                    // IGNORE tool calls in synthesis phase - don't add to history, just re-ask
+                    console.log(`[CTM Agent] ⚠️ IGNORING ${toolUses.length} tool calls in synthesis phase - re-asking`);
 
-                // If we're at max iterations and agent is still trying to use tools, force a final summary
-                if (iteration >= maxIterations) {
-                    console.log('[CTM Agent] WARNING: At max iterations but agent still wants to use tools. Forcing final summary...');
-
-                    // DON'T add the tool_use assistant message to history (would break pairing)
-                    // Instead, make emergency call with existing history + demand for summary
-
-                    const emergencyMessages: Anthropic.MessageParam[] = [
-                        ...this.conversationHistory,
-                        {
-                            role: 'user',
-                            content: `EMERGENCY STOP: You have reached the maximum iteration limit (${maxIterations}/${maxIterations}).
-
-Based on ALL the context you have gathered so far, provide your final summary RIGHT NOW.
-
-You MUST provide a complete answer in 3-5 paragraphs covering:
-1. What this code is and when it was added (commit, author, date)
-2. WHY it exists - what problem did it solve?
-3. HOW it solves the problem - implementation details
-4. Any relevant context, recommendations, or caveats
-
-Use the information from your previous tool calls. If you don't have all details, provide the best answer you can with what you gathered.
-
-DO NOT say you need more information. DO NOT attempt any more tool calls. Synthesize what you have NOW.`
-                        }
-                    ];
-
-                    // Make one emergency call to force a text response (NO TOOLS available)
-                    console.log('[CTM Agent] Making emergency call for final summary (tools disabled)...');
-                    const emergencyResponse = await this.anthropic.messages.create({
-                        model: 'claude-3-5-haiku-20241022',
-                        max_tokens: 4000,
-                        tools: [], // Explicitly disable tools
-                        messages: emergencyMessages
+                    // Add a stronger reminder (don't add the tool_use response to history)
+                    this.conversationHistory.push({
+                        role: 'user',
+                        content: `You are in SYNTHESIS MODE. Tools are unavailable. Write your final answer NOW using the evidence you already gathered. Do not attempt tool calls.`
                     });
-
-                    const emergencyText = emergencyResponse.content.find(block => block.type === 'text');
-                    if (emergencyText && emergencyText.type === 'text') {
-                        finalResponse = emergencyText.text;
-                        console.log('[CTM Agent] Emergency summary generated:', finalResponse.length, 'chars');
-                    } else {
-                        console.error('[CTM Agent] ERROR: Emergency call did not return text!');
-                        finalResponse = 'Investigation reached max iterations but failed to generate emergency summary.';
-                    }
-
-                    break;
+                    continue; // Re-ask without processing tool calls
                 }
 
-                // Add assistant message to history
+                // Got text-only response in synthesis - we're done!
+                if (textContent && textContent.type === 'text') {
+                    finalResponse = textContent.text;
+                    console.log(`[CTM Agent] ✓ Synthesis complete: ${finalResponse.length} chars`);
+                    break;
+                }
+            }
+
+            // INVESTIGATE PHASE: Handle tool calls
+            if (phase === 'investigate' && toolUses.length > 0) {
+                console.log(`[CTM Agent] Processing ${toolUses.length} tool call(s)`);
+
+                // Add assistant response to history
                 this.conversationHistory.push({
                     role: 'assistant',
                     content: response.content
@@ -219,23 +146,213 @@ DO NOT say you need more information. DO NOT attempt any more tool calls. Synthe
                 const toolResults: Anthropic.ToolResultBlockParam[] = [];
                 for (const toolUse of toolUses) {
                     if (toolUse.type === 'tool_use') {
-                        console.log('[CTM Agent] Executing tool:', toolUse.name);
-                        console.log('[CTM Agent] Tool input:', JSON.stringify(toolUse.input, null, 2));
+                        toolCallCount++;
+                        console.log(`[CTM Agent] Tool ${toolCallCount}/${MAX_TOOL_CALLS}: ${toolUse.name}`);
 
                         const result = await this.executeTool(toolUse.name, toolUse.input);
 
-                        // Store context if it's get_line_context or get_local_line_context
+                        // Collect context from various tools
                         if (toolUse.name === 'get_line_context' || toolUse.name === 'get_local_line_context') {
                             collectedContext = { ...collectedContext, ...result };
                         }
 
-                        console.log('[CTM Agent] Tool result keys:', Object.keys(result));
+                        // Capture PR info from get_pr calls
+                        if (toolUse.name === 'get_pr' && result && result.number) {
+                            collectedContext.pull_request = result;
+                            console.log(`[CTM Agent] Captured PR #${result.number} in context`);
+                        }
 
-                        // Truncate tool result to reduce token usage
+                        // Capture issue info from get_issue calls
+                        if (toolUse.name === 'get_issue' && result && result.number) {
+                            if (!collectedContext.linked_issues) {
+                                collectedContext.linked_issues = [];
+                            }
+                            // Avoid duplicates
+                            if (!collectedContext.linked_issues.some((i: any) => i.number === result.number)) {
+                                collectedContext.linked_issues.push(result);
+                                console.log(`[CTM Agent] Captured issue #${result.number} in context`);
+                            }
+                        }
+
+                        // Capture PR references from search_prs_for_commit
+                        if (toolUse.name === 'search_prs_for_commit' && result && result.items && result.items.length > 0) {
+                            // Store the first PR if we don't have one yet
+                            if (!collectedContext.pull_request && result.items[0]) {
+                                collectedContext.pull_request = result.items[0];
+                                console.log(`[CTM Agent] Captured PR #${result.items[0].number} from search in context`);
+                            }
+                        }
+
                         const truncatedResult = this.truncateToolResult(toolUse.name, result);
-                        const originalSize = JSON.stringify(result).length;
-                        const truncatedSize = truncatedResult.length;
-                        console.log(`[CTM Agent] Tool result size: ${originalSize} -> ${truncatedSize} chars (${Math.round((1 - truncatedSize / originalSize) * 100)}% reduction)`);
+                        toolResults.push({
+                            type: 'tool_result',
+                            tool_use_id: toolUse.id,
+                            content: truncatedResult
+                        });
+
+                        // Check if we hit the hard cap
+                        if (toolCallCount >= MAX_TOOL_CALLS) {
+                            console.log(`[CTM Agent] ⚠️ Hit MAX_TOOL_CALLS (${MAX_TOOL_CALLS}) - forcing synthesis`);
+                            phase = 'synthesize';
+                            break;
+                        }
+                    }
+                }
+
+                // Add tool results to history
+                this.conversationHistory.push({
+                    role: 'user',
+                    content: toolResults
+                });
+
+                // If we just hit the cap, add synthesis prompt
+                if (phase === 'synthesize') {
+                    this.conversationHistory.push({
+                        role: 'user',
+                        content: this.buildSynthesisPrompt()
+                    });
+                }
+
+                continue;
+            }
+
+            // INVESTIGATE PHASE: No tool calls = natural completion
+            if (phase === 'investigate' && toolUses.length === 0) {
+                if (textContent && textContent.type === 'text') {
+                    // Agent finished naturally during investigation
+                    finalResponse = textContent.text;
+                    console.log(`[CTM Agent] ✓ Natural completion: ${finalResponse.length} chars`);
+                    break;
+                }
+            }
+
+            // Safety: prevent infinite loops
+            if (iteration > 20) {
+                console.error('[CTM Agent] ERROR: Too many iterations, breaking');
+                finalResponse = 'Investigation exceeded maximum iterations.';
+                break;
+            }
+        }
+
+        // Log summary
+        console.log('\n========== INVESTIGATION SUMMARY ==========');
+        console.log(`Iterations: ${iteration}`);
+        console.log(`Tool calls: ${toolCallCount}`);
+        console.log(`Total tokens: ${totalInputTokens + totalOutputTokens}`);
+        console.log(`Final response: ${finalResponse.length} chars`);
+        console.log('============================================\n');
+
+        return {
+            summary: finalResponse || 'Investigation completed but no summary was generated.',
+            rawContext: collectedContext
+        };
+    }
+
+    private buildSynthesisPrompt(): string {
+        // Short, identity-based prompt for synthesis phase
+        // NO CLAUDE.md - that encourages investigation
+        return `You are now in SYNTHESIS MODE.
+
+Investigation is complete. Tools are unavailable.
+Your job is to write the final answer using ONLY the evidence already gathered.
+
+Structure your answer as:
+
+**What & When:** What is this code? When was it added? (commit SHA, author, date)
+**Why:** What problem did it solve? Any linked issues or PRs?
+**How:** How does this code solve the problem?
+**Context:** Any related changes or recommendations?
+
+Do NOT apologize for missing information.
+Do NOT request more data.
+Synthesize what you have into a clear, complete answer NOW.`;
+    }
+
+    /**
+     * Ask a follow-up question based on the previous investigation
+     * @param question The user's follow-up question
+     * @param previousContext The previous investigation summary
+     * @returns The answer to the follow-up question
+     */
+    async askFollowUp(question: string, previousContext: string): Promise<string> {
+        console.log('[CTM Agent] Starting follow-up investigation');
+        console.log('[CTM Agent] Question:', question);
+
+        // Get available tools
+        const tools = await this.getAvailableTools();
+
+        // Build follow-up prompt
+        const followUpPrompt = `You previously investigated code at:
+- **Repository:** ${this.config.owner}/${this.config.repo}
+- **File:** ${this.config.filePath}
+- **Lines:** ${this.config.lineStart}-${this.config.lineEnd}
+- **Branch:** ${this.config.branch || 'HEAD'}
+
+## Previous Investigation Summary
+
+${previousContext}
+
+## User's Follow-up Question
+
+${question}
+
+## Your Task
+
+Answer the user's follow-up question. You can use the same investigation tools (get_local_line_context, get_commit_diff, etc.) to gather more information if needed. Keep your answer concise but thorough. You have 5 iterations maximum for this follow-up.`;
+
+        // Reset conversation history for follow-up
+        const followUpHistory: Anthropic.MessageParam[] = [{
+            role: 'user',
+            content: followUpPrompt
+        }];
+
+        const maxFollowUpIterations = 5;
+        let iteration = 0;
+        let finalResponse = '';
+
+        while (iteration < maxFollowUpIterations) {
+            iteration++;
+            console.log(`[CTM Agent Follow-up] Iteration ${iteration}/${maxFollowUpIterations}`);
+
+            // Disable tools at final iteration to force answer
+            const toolsToUse = iteration >= maxFollowUpIterations ? [] : tools;
+
+            const response = await this.anthropic.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 4000,
+                tools: toolsToUse,
+                messages: followUpHistory
+            });
+
+            console.log('[CTM Agent Follow-up] Stop reason:', response.stop_reason);
+
+            // Process response
+            const textContent = response.content.find(block => block.type === 'text');
+            if (textContent && textContent.type === 'text') {
+                console.log('[CTM Agent Follow-up] Response:', textContent.text.substring(0, 200) + '...');
+            }
+
+            // Handle tool calls
+            const toolUses = response.content.filter(block => block.type === 'tool_use');
+
+            if (toolUses.length > 0 && iteration < maxFollowUpIterations) {
+                console.log('[CTM Agent Follow-up] Executing', toolUses.length, 'tool(s)');
+
+                // Add assistant message to history
+                followUpHistory.push({
+                    role: 'assistant',
+                    content: response.content
+                });
+
+                // Execute tool calls
+                const toolResults: Anthropic.ToolResultBlockParam[] = [];
+                for (const toolUse of toolUses) {
+                    if (toolUse.type === 'tool_use') {
+                        console.log('[CTM Agent Follow-up] Executing:', toolUse.name);
+                        const result = await this.executeTool(toolUse.name, toolUse.input);
+
+                        // Truncate result
+                        const truncatedResult = this.truncateToolResult(toolUse.name, result);
 
                         toolResults.push({
                             type: 'tool_result',
@@ -246,106 +363,22 @@ DO NOT say you need more information. DO NOT attempt any more tool calls. Synthe
                 }
 
                 // Add tool results to history
-                this.conversationHistory.push({
+                followUpHistory.push({
                     role: 'user',
                     content: toolResults
                 });
-
-                // PRUNING DISABLED FOR TESTING - keeping full conversation history
-                // Prune conversation history to prevent unbounded growth
-                // CRITICAL: Keep complete conversation turns (assistant + user pairs) to maintain tool_use/tool_result pairing
-                const MAX_HISTORY_TURNS = 3; // Keep last 3 complete turns (6 messages: 3 assistant + 3 user)
-                const maxHistoryMessages = MAX_HISTORY_TURNS * 2; // Each turn = assistant + user message
-
-                if (false && this.conversationHistory.length > maxHistoryMessages + 1) {
-                    console.log('[CTM Agent] === PRUNING DEBUG ===');
-                    console.log('[CTM Agent] History before pruning:', this.conversationHistory.map(m => m.role).join(' → '));
-                    console.log('[CTM Agent] Total messages:', this.conversationHistory.length);
-
-                    // Structure: [initial_user, assistant1, user1, assistant2, user2, ...]
-                    // We must keep complete (assistant, user) pairs to avoid breaking tool_use/tool_result pairing
-
-                    const firstMessage = this.conversationHistory[0]; // Initial user prompt
-                    console.log('[CTM Agent] First message role:', firstMessage?.role);
-
-                    const withoutFirst = this.conversationHistory.slice(1); // All messages after initial
-                    console.log('[CTM Agent] Messages after first:', withoutFirst.length);
-
-                    // Each pair is (assistant, user), so we need an even number
-                    // Keep the last N pairs
-                    const pairsToKeep = Math.min(MAX_HISTORY_TURNS, Math.floor(withoutFirst.length / 2));
-                    const messagesToKeep = pairsToKeep * 2;
-                    console.log('[CTM Agent] Keeping', pairsToKeep, 'pairs =', messagesToKeep, 'messages');
-
-                    // Get the last N complete pairs (skip any trailing unpaired message)
-                    const recentMessages = withoutFirst.slice(-messagesToKeep);
-                    console.log('[CTM Agent] Recent messages:', recentMessages.map(m => m.role).join(' → '));
-
-                    // Verify we're starting with an assistant message (not orphaned user message)
-                    if (recentMessages.length > 0 && recentMessages[0].role !== 'assistant') {
-                        console.error('[CTM Agent] ERROR: Pruning would create orphaned tool_result! Skipping pruning.');
-                        console.error('[CTM Agent] First recent message role:', recentMessages[0].role);
-                    } else {
-                        const prunedCount = withoutFirst.length - recentMessages.length;
-                        console.log(`[CTM Agent] Pruning ${prunedCount} old messages`);
-                        this.conversationHistory = [firstMessage, ...recentMessages];
-                        console.log('[CTM Agent] History after pruning:', this.conversationHistory.map(m => m.role).join(' → '));
-                        console.log('[CTM Agent] Total after pruning:', this.conversationHistory.length);
-                    }
-                    console.log('[CTM Agent] === END PRUNING DEBUG ===');
-                }
             } else {
-                // No more tool calls, Claude has finished
-                console.log('[CTM Agent] No tool uses - investigation complete');
-
+                // No more tool calls or at max iterations
                 const finalText = response.content.find(block => block.type === 'text');
                 if (finalText && finalText.type === 'text') {
                     finalResponse = finalText.text;
-                    console.log(`[CTM Agent] Final response captured: ${finalResponse.length} chars`);
-                } else {
-                    console.error('[CTM Agent] ERROR: No text block in final response!');
-                    console.error('[CTM Agent] Response content:', JSON.stringify(response.content, null, 2));
+                    console.log('[CTM Agent Follow-up] Got final response:', finalResponse.length, 'chars');
                 }
-
                 break;
             }
         }
 
-        if (iteration >= maxIterations) {
-            console.log('[CTM Agent] WARNING: Reached max iterations without natural completion');
-            console.log('[CTM Agent] Attempting to extract final response from conversation history...');
-            // Extract last text response
-            for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
-                const msg = this.conversationHistory[i];
-                if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-                    const textBlock = msg.content.find(block => block.type === 'text');
-                    if (textBlock && textBlock.type === 'text') {
-                        finalResponse = textBlock.text;
-                        console.log(`[CTM Agent] Extracted ${finalResponse.length} chars from history message ${i}`);
-                        break;
-                    }
-                }
-            }
-            if (!finalResponse) {
-                console.error('[CTM Agent] ERROR: Could not find any text in conversation history!');
-            }
-        }
-
-        console.log('[CTM Agent] Final response length:', finalResponse.length, 'chars');
-
-        // Log final token usage summary
-        console.log('\n========== TOKEN USAGE SUMMARY ==========');
-        console.log(`Total iterations: ${iteration}`);
-        console.log(`Total input tokens: ${totalInputTokens}`);
-        console.log(`Total output tokens: ${totalOutputTokens}`);
-        console.log(`TOTAL TOKENS: ${totalInputTokens + totalOutputTokens}`);
-        console.log(`Average per iteration: ${Math.round((totalInputTokens + totalOutputTokens) / iteration)} tokens`);
-        console.log('=========================================\n');
-
-        return {
-            summary: finalResponse || 'Investigation completed but no summary was generated.',
-            rawContext: collectedContext
-        };
+        return finalResponse || 'I was unable to answer the follow-up question.';
     }
 
     private buildInitialPrompt(): string {
@@ -378,7 +411,7 @@ Investigate this code:
 - **Branch:** ${this.config.branch || 'HEAD'}
 - **Local Path:** ${this.config.repoPath}
 
-**You have ${maxIterations} iterations.** Follow the 5-step investigation strategy above. Begin your investigation now.`;
+**You have ${MAX_TOOL_CALLS} tool calls before synthesis begins.** You will NOT control when investigation ends. When synthesis begins, you must stop immediately. Begin your investigation now.`;
     }
 
     private async getAvailableTools(): Promise<Anthropic.Tool[]> {
