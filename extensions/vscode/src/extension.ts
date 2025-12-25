@@ -179,7 +179,8 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 lineStart: startLine,
                 lineEnd: endLine,
                 branch: currentBranch,
-                model: model
+                model: model,
+                selectedText: selectedText
             });
 
             // Set up progress callback for real-time updates

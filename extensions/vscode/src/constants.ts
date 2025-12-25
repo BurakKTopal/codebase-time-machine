@@ -31,6 +31,10 @@ export const CORE_TOOLS = [
     'get_github_file_history',  // File commit history
     'get_github_commits_batch', // Efficient batch commit fetching
     'explain_file',             // File overview, purpose, contributors
+    'get_commit_diff',          // See actual changes in a commit
+
+    // === Code archaeology ===
+    'pickaxe_search',           // Find when code was added/removed (git -S)
 
     // === Ownership & context ===
     'get_code_owners',          // Who knows this code best
@@ -43,7 +47,12 @@ export const AVAILABLE_MODELS = [
     {
         id: 'claude-3-5-haiku-20241022',
         label: 'Haiku 3.5',
-        description: 'Fast and cost-effective (recommended)'
+        description: 'Fast and cost-effective'
+    },
+    {
+        id: 'claude-haiku-4-5-20251001',
+        label: 'Haiku 4.5',
+        description: 'Improved speed and efficiency'
     },
     {
         id: 'claude-sonnet-4-20250514',
@@ -51,9 +60,19 @@ export const AVAILABLE_MODELS = [
         description: 'Balanced performance'
     },
     {
+        id: 'claude-sonnet-4-5-20250929',
+        label: 'Sonnet 4.5',
+        description: 'Enhanced balanced performance'
+    },
+    {
         id: 'claude-opus-4-20250514',
         label: 'Opus 4',
-        description: 'Most capable, highest cost'
+        description: 'Most capable'
+    },
+    {
+        id: 'claude-opus-4-5-20251101',
+        label: 'Opus 4.5',
+        description: 'Most advanced and intelligent'
     }
 ];
 

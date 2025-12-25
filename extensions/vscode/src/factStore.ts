@@ -12,6 +12,20 @@ export interface Fact {
 }
 
 /**
+ * Verbatim evidence extracted from tool output.
+ * Unlike facts (semantic summaries), evidence preserves exact details
+ * like email addresses, full commit SHAs, and precise timestamps.
+ *
+ * Evidence is only attached during synthesis phase (≤500 tokens).
+ */
+export interface Evidence {
+    id: string;           // Unique identifier (e.g., "author_abc123")
+    type: 'author' | 'committer' | 'timestamp' | 'sha' | 'url';
+    verbatim: string;     // Exact value: "John Doe <john@example.com>"
+    source: string;       // Tool that produced this
+}
+
+/**
  * Investigation state - replaces conversation history.
  * This is what gets sent to the model instead of accumulated messages.
  */
@@ -34,6 +48,7 @@ export interface InvestigationState {
  */
 export class FactStore {
     private facts: Map<string, Fact> = new Map();
+    private evidence: Map<string, Evidence> = new Map();
     private toolsCalled: string[] = [];
     private anthropic: Anthropic;
 
@@ -42,7 +57,7 @@ export class FactStore {
     }
 
     /**
-     * Extract facts from a tool result and store them.
+     * Extract facts and evidence from a tool result and store them.
      * Returns a SHORT confirmation (not the raw result).
      */
     async extractAndStore(toolName: string, result: any): Promise<string> {
@@ -56,11 +71,17 @@ export class FactStore {
         // Extract facts based on tool type (deterministic, no LLM needed for structured data)
         const facts = this.extractFactsFromResult(toolName, result);
 
+        // Extract verbatim evidence (emails, full SHAs, timestamps)
+        const evidenceItems = this.extractEvidenceFromResult(toolName, result);
+
         // Store facts (deduplicated by ID)
         facts.forEach(f => this.facts.set(f.id, f));
 
-        console.log(`[FactStore] Extracted ${facts.length} facts from ${toolName}`);
-        console.log(`[FactStore] Total facts: ${this.facts.size}`);
+        // Store evidence (deduplicated by ID)
+        evidenceItems.forEach(e => this.evidence.set(e.id, e));
+
+        console.log(`[FactStore] Extracted ${facts.length} facts, ${evidenceItems.length} evidence items from ${toolName}`);
+        console.log(`[FactStore] Total: ${this.facts.size} facts, ${this.evidence.size} evidence`);
 
         // Return SHORT confirmation - NOT the raw result
         return `✓ ${toolName}: ${facts.length} facts extracted`;
@@ -251,7 +272,327 @@ export class FactStore {
             });
         }
 
+        // Handle pickaxe_search - finds when code was added/removed
+        if (toolName === 'pickaxe_search') {
+            if (result.commits && result.commits.length > 0) {
+                result.commits.forEach((c: any) => {
+                    facts.push({
+                        id: `pickaxe_${c.sha?.substring(0, 8)}`,
+                        text: `Pickaxe found commit ${c.sha}: by ${c.author} on ${c.date?.substring(0, 10)} - "${c.message?.split('\n')[0]?.substring(0, 80)}"`,
+                        source: toolName,
+                        category: 'commit'
+                    });
+                });
+
+                // Mark the first result as most likely the origin
+                const first = result.commits[0];
+                facts.push({
+                    id: `pickaxe_origin`,
+                    text: `PICKAXE: Code "${result.search_string || 'pattern'}" first appeared in commit ${first.sha} by ${first.author}`,
+                    source: toolName,
+                    category: 'commit'
+                });
+            } else {
+                facts.push({
+                    id: 'pickaxe_no_results',
+                    text: `Pickaxe search for "${result.search_string || 'pattern'}" found no commits`,
+                    source: toolName,
+                    category: 'other'
+                });
+            }
+        }
+
+        // Handle get_commit_diff - shows actual changes in a commit
+        if (toolName === 'get_commit_diff') {
+            const sha = result.sha || result.commit?.sha;
+            if (result.files && result.files.length > 0) {
+                // Summary of files changed
+                const fileNames = result.files.map((f: any) => f.filename || f.path).slice(0, 5);
+                facts.push({
+                    id: `diff_files_${sha?.substring(0, 8)}`,
+                    text: `Commit ${sha} modified: ${fileNames.join(', ')}${result.files.length > 5 ? ` (+${result.files.length - 5} more)` : ''}`,
+                    source: toolName,
+                    category: 'commit'
+                });
+
+                // Extract key changes from patch if present
+                result.files.forEach((f: any) => {
+                    if (f.patch && f.patch.length > 0) {
+                        // Extract added lines (lines starting with +)
+                        const addedLines = f.patch.split('\n')
+                            .filter((line: string) => line.startsWith('+') && !line.startsWith('+++'))
+                            .slice(0, 3)
+                            .map((line: string) => line.substring(1).trim())
+                            .filter((line: string) => line.length > 5);
+
+                        if (addedLines.length > 0) {
+                            facts.push({
+                                id: `diff_added_${sha?.substring(0, 8)}_${f.filename?.substring(0, 20)}`,
+                                text: `Added in ${f.filename || f.path}: ${addedLines.join(' | ').substring(0, 150)}`,
+                                source: toolName,
+                                category: 'code'
+                            });
+                        }
+                    }
+                });
+            }
+
+            // Include commit message if present
+            if (result.message || result.commit?.message) {
+                const msg = result.message || result.commit?.message;
+                facts.push({
+                    id: `diff_message_${sha?.substring(0, 8)}`,
+                    text: `Commit ${sha} message: "${msg.split('\n')[0].substring(0, 100)}"`,
+                    source: toolName,
+                    category: 'commit'
+                });
+            }
+        }
+
         return facts;
+    }
+
+    /**
+     * Extract verbatim evidence from tool result.
+     * Captures exact details like emails, full SHAs, precise timestamps.
+     * This is separate from facts to enable precision answers.
+     */
+    private extractEvidenceFromResult(toolName: string, result: any): Evidence[] {
+        const evidence: Evidence[] = [];
+
+        // Helper to extract author with email
+        const extractAuthor = (author: any, id: string): void => {
+            if (!author) return;
+
+            // Handle string format: "Name <email>"
+            if (typeof author === 'string') {
+                evidence.push({
+                    id,
+                    type: 'author',
+                    verbatim: author,
+                    source: toolName
+                });
+                return;
+            }
+
+            // Handle object format: { name, email }
+            if (author.email) {
+                const verbatim = author.name
+                    ? `${author.name} <${author.email}>`
+                    : author.email;
+                evidence.push({
+                    id,
+                    type: 'author',
+                    verbatim,
+                    source: toolName
+                });
+            } else if (author.name) {
+                evidence.push({
+                    id,
+                    type: 'author',
+                    verbatim: author.name,
+                    source: toolName
+                });
+            }
+        };
+
+        // Handle get_local_line_context / get_line_context
+        if (toolName === 'get_local_line_context' || toolName === 'get_line_context') {
+            // Blame commit author
+            if (result.blame_commit) {
+                const bc = result.blame_commit;
+                if (bc.sha) {
+                    evidence.push({
+                        id: `sha_blame_${bc.sha.substring(0, 8)}`,
+                        type: 'sha',
+                        verbatim: bc.sha,
+                        source: toolName
+                    });
+                }
+                extractAuthor(bc.author_email ? { name: bc.author, email: bc.author_email } : bc.author,
+                    `author_blame_${bc.sha?.substring(0, 8)}`);
+                if (bc.date) {
+                    evidence.push({
+                        id: `timestamp_blame_${bc.sha?.substring(0, 8)}`,
+                        type: 'timestamp',
+                        verbatim: bc.date,
+                        source: toolName
+                    });
+                }
+            }
+
+            // PR author
+            if (result.pull_request) {
+                const pr = result.pull_request;
+                if (pr.author) {
+                    evidence.push({
+                        id: `author_pr_${pr.number}`,
+                        type: 'author',
+                        verbatim: typeof pr.author === 'string' ? pr.author : pr.author.login || pr.author.name,
+                        source: toolName
+                    });
+                }
+                if (pr.html_url || pr.url) {
+                    evidence.push({
+                        id: `url_pr_${pr.number}`,
+                        type: 'url',
+                        verbatim: pr.html_url || pr.url,
+                        source: toolName
+                    });
+                }
+            }
+
+            // Historical commits
+            if (result.historical_commits) {
+                result.historical_commits.forEach((commit: any) => {
+                    if (commit.sha) {
+                        evidence.push({
+                            id: `sha_history_${commit.sha.substring(0, 8)}`,
+                            type: 'sha',
+                            verbatim: commit.sha,
+                            source: toolName
+                        });
+                    }
+                    extractAuthor(
+                        commit.author_email ? { name: commit.author, email: commit.author_email } : commit.author,
+                        `author_history_${commit.sha?.substring(0, 8)}`
+                    );
+                });
+            }
+        }
+
+        // Handle get_pr
+        if (toolName === 'get_pr') {
+            if (result.author) {
+                evidence.push({
+                    id: `author_pr_${result.number}`,
+                    type: 'author',
+                    verbatim: typeof result.author === 'string' ? result.author : result.author.login,
+                    source: toolName
+                });
+            }
+            if (result.html_url) {
+                evidence.push({
+                    id: `url_pr_${result.number}`,
+                    type: 'url',
+                    verbatim: result.html_url,
+                    source: toolName
+                });
+            }
+            if (result.created_at) {
+                evidence.push({
+                    id: `timestamp_pr_${result.number}`,
+                    type: 'timestamp',
+                    verbatim: result.created_at,
+                    source: toolName
+                });
+            }
+        }
+
+        // Handle get_issue
+        if (toolName === 'get_issue') {
+            if (result.author) {
+                evidence.push({
+                    id: `author_issue_${result.number}`,
+                    type: 'author',
+                    verbatim: typeof result.author === 'string' ? result.author : result.author.login,
+                    source: toolName
+                });
+            }
+            if (result.html_url) {
+                evidence.push({
+                    id: `url_issue_${result.number}`,
+                    type: 'url',
+                    verbatim: result.html_url,
+                    source: toolName
+                });
+            }
+        }
+
+        // Handle get_commit / get_github_commit
+        if (toolName === 'get_commit' || toolName === 'get_github_commit') {
+            const commit = result.commit || result;
+            if (commit.sha) {
+                evidence.push({
+                    id: `sha_commit_${commit.sha.substring(0, 8)}`,
+                    type: 'sha',
+                    verbatim: commit.sha,
+                    source: toolName
+                });
+            }
+            // Author with email
+            if (commit.author) {
+                extractAuthor(commit.author, `author_commit_${commit.sha?.substring(0, 8)}`);
+            }
+            // Committer (if different)
+            if (commit.committer && commit.committer.email !== commit.author?.email) {
+                extractAuthor(commit.committer, `committer_commit_${commit.sha?.substring(0, 8)}`);
+            }
+            if (commit.authored_date || commit.date) {
+                evidence.push({
+                    id: `timestamp_commit_${commit.sha?.substring(0, 8)}`,
+                    type: 'timestamp',
+                    verbatim: commit.authored_date || commit.date,
+                    source: toolName
+                });
+            }
+        }
+
+        // Handle file history
+        if ((toolName === 'get_github_file_history' || toolName === 'trace_file_history') && result.commits) {
+            result.commits.slice(0, 5).forEach((c: any) => {
+                if (c.sha) {
+                    evidence.push({
+                        id: `sha_filehistory_${c.sha.substring(0, 8)}`,
+                        type: 'sha',
+                        verbatim: c.sha,
+                        source: toolName
+                    });
+                }
+                extractAuthor(c.author, `author_filehistory_${c.sha?.substring(0, 8)}`);
+            });
+        }
+
+        // Handle pickaxe_search
+        if (toolName === 'pickaxe_search' && result.commits) {
+            result.commits.forEach((c: any) => {
+                if (c.sha) {
+                    evidence.push({
+                        id: `sha_pickaxe_${c.sha.substring(0, 8)}`,
+                        type: 'sha',
+                        verbatim: c.sha,
+                        source: toolName
+                    });
+                }
+                extractAuthor(c.author, `author_pickaxe_${c.sha?.substring(0, 8)}`);
+                if (c.date) {
+                    evidence.push({
+                        id: `timestamp_pickaxe_${c.sha?.substring(0, 8)}`,
+                        type: 'timestamp',
+                        verbatim: c.date,
+                        source: toolName
+                    });
+                }
+            });
+        }
+
+        // Handle get_commit_diff
+        if (toolName === 'get_commit_diff') {
+            const sha = result.sha || result.commit?.sha;
+            if (sha) {
+                evidence.push({
+                    id: `sha_diff_${sha.substring(0, 8)}`,
+                    type: 'sha',
+                    verbatim: sha,
+                    source: toolName
+                });
+            }
+            if (result.author) {
+                extractAuthor(result.author, `author_diff_${sha?.substring(0, 8)}`);
+            }
+        }
+
+        return evidence;
     }
 
     /**
@@ -289,6 +630,10 @@ export class FactStore {
         if (factsByCategory.has('author')) {
             lines.push('**Authors:**');
             factsByCategory.get('author')!.forEach(f => lines.push(`- ${f.text}`));
+        }
+        if (factsByCategory.has('code')) {
+            lines.push('**Code Changes:**');
+            factsByCategory.get('code')!.forEach(f => lines.push(`- ${f.text}`));
         }
         if (factsByCategory.has('other')) {
             lines.push('**Other:**');
@@ -358,10 +703,82 @@ export class FactStore {
     }
 
     /**
-     * Clear all facts (for new investigation).
+     * Get evidence count.
+     */
+    getEvidenceCount(): number {
+        return this.evidence.size;
+    }
+
+    /**
+     * Get verbatim evidence summary for synthesis phase.
+     * This is a compact (≤500 tokens) bundle of exact details.
+     * Only use this during synthesis - not during investigation.
+     */
+    getEvidenceSummary(): string {
+        if (this.evidence.size === 0) {
+            return '';
+        }
+
+        const byType = new Map<string, Evidence[]>();
+        this.evidence.forEach(e => {
+            if (!byType.has(e.type)) {
+                byType.set(e.type, []);
+            }
+            byType.get(e.type)!.push(e);
+        });
+
+        const lines: string[] = ['**Verbatim Evidence (for precision answers):**'];
+
+        // Authors/Committers with emails
+        if (byType.has('author')) {
+            lines.push('Authors:');
+            // Deduplicate by verbatim value
+            const unique = new Map<string, Evidence>();
+            byType.get('author')!.forEach(e => unique.set(e.verbatim, e));
+            unique.forEach(e => lines.push(`  - ${e.verbatim}`));
+        }
+
+        if (byType.has('committer')) {
+            lines.push('Committers:');
+            const unique = new Map<string, Evidence>();
+            byType.get('committer')!.forEach(e => unique.set(e.verbatim, e));
+            unique.forEach(e => lines.push(`  - ${e.verbatim}`));
+        }
+
+        // Full SHAs
+        if (byType.has('sha')) {
+            lines.push('Full Commit SHAs:');
+            byType.get('sha')!.slice(0, 10).forEach(e => {
+                // Extract short ID from evidence ID for reference
+                const shortId = e.id.split('_').pop();
+                lines.push(`  - ${shortId}: ${e.verbatim}`);
+            });
+        }
+
+        // URLs (PRs, Issues)
+        if (byType.has('url')) {
+            lines.push('Links:');
+            byType.get('url')!.forEach(e => lines.push(`  - ${e.verbatim}`));
+        }
+
+        // Timestamps
+        if (byType.has('timestamp')) {
+            lines.push('Timestamps:');
+            byType.get('timestamp')!.slice(0, 5).forEach(e => {
+                const ref = e.id.replace('timestamp_', '');
+                lines.push(`  - ${ref}: ${e.verbatim}`);
+            });
+        }
+
+        return lines.join('\n');
+    }
+
+    /**
+     * Clear all facts and evidence (for new investigation).
      */
     clear(): void {
         this.facts.clear();
+        this.evidence.clear();
         this.toolsCalled = [];
     }
 }

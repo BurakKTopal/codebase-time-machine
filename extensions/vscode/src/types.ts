@@ -15,6 +15,7 @@ export interface AgentConfig {
     lineEnd: number;
     branch?: string;
     model: string;  // Claude model to use
+    selectedText: string;  // The actual text content the user selected
 }
 
 /**

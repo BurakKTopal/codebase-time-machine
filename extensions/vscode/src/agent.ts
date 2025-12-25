@@ -99,6 +99,10 @@ export class CTMAgent {
         const toolsCalled = this.factStore.getToolsCalled();
 
         if (phase === 'synthesize') {
+            // Include verbatim evidence during synthesis for precision answers
+            const evidence = this.factStore.getEvidenceSummary();
+            const evidenceSection = evidence ? `\n### Verbatim Evidence\n${evidence}\n` : '';
+
             return `## Synthesize Your Findings
 
 You have gathered the following facts about this code:
@@ -106,15 +110,20 @@ You have gathered the following facts about this code:
 **File:** ${this.config.filePath}
 **Lines:** ${this.config.lineStart}-${this.config.lineEnd}
 
+### Selected Code
+\`\`\`
+${this.config.selectedText}
+\`\`\`
+
 ### Known Facts
 ${facts}
-
+${evidenceSection}
 ### Tools Called
 ${toolsCalled.join(', ')}
 
 Now write a clear, comprehensive explanation of WHY this code exists.
 Structure your answer with:
-1. **Origin** - When and by whom was this code added?
+1. **Origin** - When and by whom was this code added? (Use exact emails/names from evidence if available)
 2. **Purpose** - What problem does it solve?
 3. **Context** - What PR/issue led to this?
 4. **Recommendation** - Should it be changed?
@@ -131,6 +140,11 @@ Investigate this code:
 - **Lines:** ${this.config.lineStart}-${this.config.lineEnd}
 - **Branch:** ${this.config.branch || 'HEAD'}
 - **Local Path:** ${this.config.repoPath}
+
+### Selected Code
+\`\`\`
+${this.config.selectedText}
+\`\`\`
 
 ### Known Facts
 ${facts || 'No facts gathered yet. Start by calling get_local_line_context.'}
@@ -345,26 +359,63 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
     }
 
     /**
-     * Build rawContext from facts for UI display
+     * Build rawContext from facts and evidence for UI display
      */
     private buildRawContextFromFacts(): any {
         const facts = Array.from(this.factStore['facts'].values());
+        const evidence = Array.from(this.factStore['evidence'].values());
         const context: any = {
             file_path: this.config.filePath,
             line_start: this.config.lineStart,
             line_end: this.config.lineEnd
         };
 
+        // Build evidence lookup for quick access
+        const evidenceByType: Record<string, any[]> = {};
+        for (const e of evidence) {
+            if (!evidenceByType[e.type]) evidenceByType[e.type] = [];
+            evidenceByType[e.type].push(e);
+        }
+
         // Extract structured data from facts
         for (const fact of facts) {
             if (fact.id.startsWith('blame_') && !context.blame_commit) {
-                context.blame_commit = { summary: fact.text };
+                // Parse fact text: "Blame commit abc123: by Author on 2024-01-15 - "Message""
+                const shaMatch = fact.text.match(/commit ([a-f0-9]+):/i);
+                const authorMatch = fact.text.match(/by ([^<\n]+?)(?:\s+on\s+|\s*<)/);
+                const dateMatch = fact.text.match(/on (\d{4}-\d{2}-\d{2})/);
+                const messageMatch = fact.text.match(/-\s*"([^"]+)"/);
+
+                // Get full SHA from evidence
+                const blameEvidence = evidenceByType['sha']?.find(e => e.id.includes('blame'));
+                const authorEvidence = evidenceByType['author']?.find(e => e.id.includes('blame'));
+                const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes('blame'));
+
+                context.blame_commit = {
+                    sha: blameEvidence?.verbatim || shaMatch?.[1] || null,
+                    author: authorEvidence?.verbatim || authorMatch?.[1]?.trim() || null,
+                    date: timestampEvidence?.verbatim || dateMatch?.[1] || null,
+                    message: messageMatch?.[1] || null,
+                    summary: fact.text
+                };
             }
             if (fact.id.startsWith('pr_') && !fact.id.includes('_reason') && !fact.id.includes('_body') && !fact.id.includes('_discussion')) {
                 if (!context.pull_request) {
                     const match = fact.text.match(/PR #(\d+)/);
+                    const prNumber = match ? parseInt(match[1]) : null;
+
+                    // Get URL from evidence
+                    const urlEvidence = evidenceByType['url']?.find(e => e.id.includes(`pr_${prNumber}`));
+                    const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(`pr_${prNumber}`));
+
+                    // Parse title from fact text: 'PR #123: "Title" by Author'
+                    const titleMatch = fact.text.match(/PR #\d+:\s*"([^"]+)"/);
+
                     context.pull_request = {
-                        number: match ? parseInt(match[1]) : null,
+                        number: prNumber,
+                        title: titleMatch?.[1] || null,
+                        author: authorEvidence?.verbatim || null,
+                        html_url: urlEvidence?.verbatim || null,
                         summary: fact.text
                     };
                 }
@@ -372,13 +423,33 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             if (fact.id.startsWith('issue_') && !fact.id.includes('_desc') && !fact.id.includes('_body')) {
                 if (!context.linked_issues) context.linked_issues = [];
                 const match = fact.text.match(/Issue #(\d+)/);
+                const issueNumber = match ? parseInt(match[1]) : null;
+
+                // Get URL from evidence
+                const urlEvidence = evidenceByType['url']?.find(e => e.id.includes(`issue_${issueNumber}`));
+
+                // Parse title from fact text
+                const titleMatch = fact.text.match(/Issue #\d+:\s*"([^"]+)"/);
+
                 context.linked_issues.push({
-                    number: match ? parseInt(match[1]) : null,
+                    number: issueNumber,
+                    title: titleMatch?.[1] || null,
+                    html_url: urlEvidence?.verbatim || null,
                     summary: fact.text
                 });
             }
             if (fact.id.startsWith('origin_')) {
-                context.origin = { summary: fact.text };
+                // Parse origin fact: "ORIGIN commit abc123: Code first added by Author on 2024-01-15"
+                const shaMatch = fact.text.match(/commit ([a-f0-9]+):/i);
+                const authorMatch = fact.text.match(/by ([^<\n]+?)(?:\s+on\s+|\s*$)/);
+                const dateMatch = fact.text.match(/on (\d{4}-\d{2}-\d{2})/);
+
+                context.origin = {
+                    sha: shaMatch?.[1] || null,
+                    author: authorMatch?.[1]?.trim() || null,
+                    date: dateMatch?.[1] || null,
+                    summary: fact.text
+                };
             }
         }
 
@@ -440,30 +511,55 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
         // Get tools for follow-up (same core tools)
         const tools = await this.getToolsForRequest();
 
-        const prompt = `## Follow-up Question
+        // Track tool calls made in this follow-up to prevent loops
+        const toolCallsMade: string[] = [];
+
+        // Helper to build the prompt with current facts
+        const buildFollowUpPrompt = (): string => {
+            const evidence = this.factStore.getEvidenceSummary();
+            const evidenceSection = evidence ? `\n**Verbatim Evidence:**\n${evidence}\n` : '';
+
+            // Show what tools have been called to prevent repeating
+            const toolCallsSection = toolCallsMade.length > 0
+                ? `\n**Tools Already Called (do NOT repeat these):**\n${toolCallsMade.map(t => `- ${t}`).join('\n')}\n`
+                : '';
+
+            return `## Follow-up Question
 
 **File:** ${this.config.filePath}
 **Lines:** ${this.config.lineStart}-${this.config.lineEnd}
 **Repository:** ${this.config.owner}/${this.config.repo}
 **Local Path:** ${this.config.repoPath}
 
+**Selected Code:**
+\`\`\`
+${this.config.selectedText}
+\`\`\`
+
 **Known Facts:**
 ${this.factStore.getFactsSummary()}
-
+${evidenceSection}${toolCallsSection}
 **Previous Analysis:**
 ${previousSummary}
 
 **User Question:**
 ${question}
 
-If you can answer from the known facts, do so. If you need more information, use a tool to get it.`;
+If you can answer from the known facts, selected code, or verbatim evidence (like emails), do so.
+If you need more information that isn't in the facts, USE A TOOL to find it (but don't repeat tools you already called).
+For example, use pickaxe_search to find when specific code/text was added or removed.
+If the information you need is not available, say so - don't keep searching.`;
+        };
 
         let toolCallCount = 0;
-        const MAX_FOLLOWUP_TOOLS = 3;  // Limit tool calls for follow-ups
+        const MAX_FOLLOWUP_TOOLS = 5;  // Increased to allow more investigation
         let finalResponse = '';
 
         // Loop to handle potential tool calls
         while (toolCallCount < MAX_FOLLOWUP_TOOLS) {
+            // CRITICAL: Rebuild prompt each iteration with updated facts
+            const prompt = buildFollowUpPrompt();
+
             const response = await this.anthropic.messages.create({
                 model: this.config.model,
                 max_tokens: 2000,
@@ -486,10 +582,22 @@ If you can answer from the known facts, do so. If you need more information, use
             }
 
             // Handle tool calls
+            let newCallsThisIteration = 0;
             for (const toolUse of toolUses) {
                 if (toolUse.type !== 'tool_use') continue;
 
+                // Create a signature for this tool call to detect duplicates
+                const toolSignature = `${toolUse.name}(${JSON.stringify(toolUse.input)})`;
+
+                // Skip if we already made this exact call
+                if (toolCallsMade.includes(toolSignature)) {
+                    console.log(`[CTM Agent] SKIPPING duplicate tool call: ${toolUse.name}`);
+                    continue;
+                }
+
                 toolCallCount++;
+                newCallsThisIteration++;
+                toolCallsMade.push(toolSignature);
                 console.log(`[CTM Agent] Follow-up tool call ${toolCallCount}/${MAX_FOLLOWUP_TOOLS}: ${toolUse.name}`);
 
                 this.reportProgress({
@@ -504,23 +612,32 @@ If you can answer from the known facts, do so. If you need more information, use
                 // Execute tool
                 const result = await this.executeTool(toolUse.name, toolUse.input);
 
-                // Extract facts (our key optimization)
+                // Extract facts - next iteration will see these in the rebuilt prompt
                 const confirmation = await this.factStore.extractAndStore(toolUse.name, result);
                 console.log(`[CTM Agent] ${confirmation}`);
             }
 
-            // After tool calls, ask again with updated facts
-            // The next iteration will include the new facts in the prompt
+            // If all tool calls were duplicates, break the loop to avoid infinite loop
+            if (toolUses.length > 0 && newCallsThisIteration === 0) {
+                console.log(`[CTM Agent] All tool calls were duplicates - forcing synthesis`);
+                break;
+            }
+
+            // Continue loop - prompt will be rebuilt with new facts
         }
 
         // If we hit tool limit without a response, synthesize one
         if (!finalResponse) {
+            // Include verbatim evidence for precision answers
+            const evidence = this.factStore.getEvidenceSummary();
+            const evidenceSection = evidence ? `\n\nVerbatim Evidence:\n${evidence}` : '';
+
             const synthResponse = await this.anthropic.messages.create({
                 model: this.config.model,
                 max_tokens: 2000,
                 messages: [{
                     role: 'user',
-                    content: `Based on these facts, answer the question: "${question}"\n\nFacts:\n${this.factStore.getFactsSummary()}`
+                    content: `Based on these facts, answer the question: "${question}"\n\nFacts:\n${this.factStore.getFactsSummary()}${evidenceSection}`
                 }]
             });
 
@@ -543,7 +660,11 @@ If you can answer from the known facts, do so. If you need more information, use
             'search_prs_for_commit': 'PR search',
             'get_github_file_history': 'file history',
             'trace_file_history': 'file history',
-            'get_commit_diff': 'commit diff'
+            'get_commit_diff': 'commit diff',
+            'pickaxe_search': 'code history search',
+            'get_code_owners': 'code owners',
+            'explain_file': 'file overview',
+            'get_github_commits_batch': 'commit batch'
         };
         return labels[toolName] || toolName.replace(/_/g, ' ');
     }
