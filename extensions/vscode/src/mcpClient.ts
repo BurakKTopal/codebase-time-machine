@@ -222,21 +222,42 @@ proc.on('exit', code => {
         const fs = require('fs');
         const path = require('path');
 
-        // Option 1: User manually configured serverCommand
+        // Priority 1: User manually configured serverCommand (advanced override)
         const manualCommand = config.get<string>('serverCommand');
-        if (manualCommand && manualCommand !== 'uv') {
+        // 'python' and 'python3' are default values, not manual overrides
+        const hasManualConfig = manualCommand && manualCommand !== 'python' && manualCommand !== 'python3';
+
+        if (hasManualConfig) {
             console.log('[CTM] Using manually configured command:', manualCommand);
             return {
                 command: manualCommand,
-                args: config.get<string[]>('serverArgs', ['ctm-server']),
-                workingDirectory: undefined
+                args: config.get<string[]>('serverArgs', []),
+                workingDirectory: serverPath || undefined
             };
         }
 
-        // Option 2: Check if ctm-server is in PATH (pip/pipx install)
+        // Priority 2: serverPath is set → Local development mode with uv
+        if (serverPath) {
+            const pyprojectPath = path.join(serverPath, 'pyproject.toml');
+            if (fs.existsSync(pyprojectPath)) {
+                const pyproject = fs.readFileSync(pyprojectPath, 'utf-8');
+                if (pyproject.includes('ctm-server')) {
+                    console.log('[CTM] Local development mode - using uv at:', serverPath);
+                    // Use Python module directly to avoid .exe locking issues on Windows
+                    return {
+                        command: 'uv',
+                        args: ['run', 'python', '-m', 'ctm_mcp_server.stdio_server'],
+                        workingDirectory: serverPath
+                    };
+                }
+            }
+            console.warn('[CTM] serverPath set but pyproject.toml not found or invalid');
+        }
+
+        // Priority 3: Check if ctm-server is in PATH (pip/pipx install - default for users)
         try {
             execSync('ctm-server --version', { stdio: 'ignore' });
-            console.log('[CTM] Detected pip/pipx installation (ctm-server in PATH)');
+            console.log('[CTM] Using pip/pipx package installation');
             return {
                 command: 'ctm-server',
                 args: [],
@@ -246,27 +267,27 @@ proc.on('exit', code => {
             // Not in PATH, continue checking other methods
         }
 
-        // Option 3: Check for local repo with uv
-        if (serverPath) {
-            const pyprojectPath = path.join(serverPath, 'pyproject.toml');
-            if (fs.existsSync(pyprojectPath)) {
-                const pyproject = fs.readFileSync(pyprojectPath, 'utf-8');
-                if (pyproject.includes('ctm-server')) {
-                    console.log('[CTM] Detected local repo with uv at:', serverPath);
-                    return {
-                        command: 'uv',
-                        args: ['run', 'ctm-server'],
-                        workingDirectory: serverPath
-                    };
-                }
+        // Priority 4: Try Python module directly (if package installed but no ctm-server in PATH)
+        // Try python first, then python3 (for Linux systems)
+        for (const pythonCmd of ['python', 'python3']) {
+            try {
+                execSync(`${pythonCmd} -m ctm_mcp_server.stdio_server --help`, { stdio: 'ignore', timeout: 2000 });
+                console.log(`[CTM] Using Python package installation (${pythonCmd})`);
+                return {
+                    command: pythonCmd,
+                    args: ['-m', 'ctm_mcp_server.stdio_server'],
+                    workingDirectory: undefined
+                };
+            } catch {
+                // Try next Python command
             }
         }
 
-        // Option 4: Try uv tool install (global)
+        // Priority 5: Try uv tool install (global)
         try {
             const uvToolList = execSync('uv tool list', { encoding: 'utf-8', stdio: 'pipe' });
             if (uvToolList.includes('codebase-time-machine')) {
-                console.log('[CTM] Detected uv tool installation');
+                console.log('[CTM] Using uv tool installation');
                 return {
                     command: 'uv',
                     args: ['tool', 'run', 'ctm-server'],
@@ -277,12 +298,11 @@ proc.on('exit', code => {
             // uv not available or tool not installed
         }
 
-        // Fallback: default to uv run (will show error if not installed)
-        console.log('[CTM] No installation detected, falling back to uv run');
-        return {
-            command: 'uv',
-            args: ['run', 'ctm-server'],
-            workingDirectory: undefined
-        };
+        // No installation found
+        throw new Error(
+            'CTM server not found. Please install it:\n' +
+            '  - Recommended: pip install codebase-time-machine\n' +
+            '  - Or set ctm.serverPath to your local CTM repository'
+        );
     }
 }

@@ -91,27 +91,27 @@
         "ctm.maxToolCalls": {
           "type": "number",
           "minimum": 3,
-          "maximum": 25,
+          "maximum": 50,
           "default": 12,
-          "description": "Maximum number of tool calls allowed during investigation. Higher values allow deeper analysis but cost more tokens."
+          "description": "Total tool calls including investigation and summarization. Last 3 calls reserved for summary. Example: value of 12 means 9 investigation + 3 summary. Higher number implies deeper analysis, but more token usage."
+        },
+        "ctm.serverPath": {
+          "type": "string",
+          "description": "Path to local CTM repository. Empty (default) = auto-detect pip/pipx package. Set path = use local repo with uv for development.",
+          "default": ""
         },
         "ctm.serverCommand": {
           "type": "string",
-          "description": "Command to start CTM server. Default uses pip/pipx installed package. For local development, set to 'uv'.",
+          "description": "Default uses the PyPI package setup, which uses 'python'. If package setup is not working, consider 'python3' instead. For local repo testing, use 'uv. Override at own risk",
           "default": "python"
         },
         "ctm.serverArgs": {
           "type": "array",
-          "description": "Arguments for CTM server command. Default uses pip/pipx package. For local development with uv, use ['run', 'ctm-server'].",
+          "description": "Default uses package setup: ['-m', 'ctm_mcp_server.stdio_server']. For local repo: ['run', 'python', '-m', 'ctm_mcp_server.stdio_server']. Override at own risk",
           "default": [
             "-m",
             "ctm_mcp_server.stdio_server"
           ]
-        },
-        "ctm.serverPath": {
-          "type": "string",
-          "description": "Working directory for CTM server (only needed for local development). Leave empty for pip/pipx package. Set to repo path for local development.",
-          "default": ""
         },
         "ctm.githubToken": {
           "type": "string",

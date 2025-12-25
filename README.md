@@ -147,6 +147,13 @@ For detailed usage and tool reference, see [CLAUDE.md](CLAUDE.md).
 
 ## Development
 
+📖 **See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for comprehensive guide** including:
+- Building and publishing to PyPI
+- VS Code extension development
+- Testing and code quality
+- Troubleshooting common issues
+
+**Quick commands**:
 ```bash
 # Install dev dependencies
 uv sync --all-extras

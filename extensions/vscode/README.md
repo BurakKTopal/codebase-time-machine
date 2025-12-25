@@ -53,9 +53,10 @@ cd codebase-time-machine
 uv sync
 
 # Configure VS Code settings:
-# ctm.serverCommand: "uv"
-# ctm.serverArgs: ["run", "ctm-server"]
 # ctm.serverPath: "/absolute/path/to/codebase-time-machine"
+#
+# Note: Extension auto-detects local repo and runs via uv automatically.
+# No need to manually configure serverCommand or serverArgs.
 ```
 
 **Summary**:
@@ -126,9 +127,9 @@ Open VS Code Settings (Ctrl+, or Cmd+,) and search for "CTM":
 |---------|---------|-------------|
 | `ctm.model` | `claude-3-5-haiku-20241022` | Model ID (must match your provider) |
 | `ctm.maxToolCalls` | `12` | Max tool calls per investigation (3-25) |
-| `ctm.serverCommand` | `python` | Command to run server (use `uv` for local dev) |
-| `ctm.serverArgs` | `["-m", "ctm_mcp_server.stdio_server"]` | Server args (use `["run", "ctm-server"]` for uv) |
-| `ctm.serverPath` | *(empty)* | Path to local CTM repo (only for local dev) |
+| `ctm.serverPath` | *(empty)* | **Empty** = use pip/pipx package (recommended). **Set path** = use local repo with uv for development |
+| `ctm.serverCommand` | `python` | Advanced: Override server command (auto-detected by default) |
+| `ctm.serverArgs` | `["-m", "ctm_mcp_server.stdio_server"]` | Advanced: Override server args (auto-detected by default) |
 | `ctm.githubToken` | *(empty)* | GitHub token for private repos |
 
 ### Available Models
@@ -200,9 +201,10 @@ uv sync
 # 4. Configure in VS Code settings:
 #    - ctm.apiKey: your-api-key
 #    - ctm.provider: anthropic (or openai/gemini)
-#    - ctm.serverCommand: uv
-#    - ctm.serverArgs: ["run", "ctm-server"]
 #    - ctm.serverPath: /absolute/path/to/codebase-time-machine
+#
+# The extension auto-detects local repo and uses uv automatically.
+# You can manually override serverCommand/serverArgs if needed (advanced).
 ```
 
 ---

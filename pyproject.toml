@@ -1,6 +1,6 @@
 [project]
 name = "codebase-time-machine"
-version = "0.1.0"
+version = "0.1.1"
 description = "Understand why code exists, not just what it does - an LLM-agnostic tool server for code history analysis"
 readme = "README.md"
 requires-python = ">=3.11"
