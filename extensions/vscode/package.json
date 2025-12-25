@@ -4,10 +4,16 @@
   "description": "Understand why code exists, not just what it does",
   "version": "0.1.0",
   "publisher": "burak",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/burak/codebase-time-machine"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -42,7 +48,10 @@
         "ctm.serverArgs": {
           "type": "array",
           "description": "Arguments for CTM server command",
-          "default": ["run", "ctm-server"]
+          "default": [
+            "run",
+            "ctm-server"
+          ]
         },
         "ctm.serverPath": {
           "type": "string",

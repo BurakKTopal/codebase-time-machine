@@ -760,28 +760,32 @@ Investigate this code:
             'get_repo_info',
             'list_branches',
             'get_commit',
-            'explain_commit'
+            'explain_commit',
+            'pickaxe_search'
         ];
 
         let translatedInput = input;
 
         if (localTools.includes(toolName)) {
-            // Agent used GitHub-style parameters, translate to local-style
-            if (input.owner && input.repo && !input.repo_path) {
-                console.log(`[CTM Agent] Auto-translating GitHub params to local params for ${toolName}`);
-                translatedInput = { ...input };
-                delete translatedInput.owner;
-                delete translatedInput.repo;
-                translatedInput.repo_path = this.config.repoPath;
+            // For local tools, ALWAYS use the current config's repoPath
+            // This prevents stale/cached paths from being used
+            console.log(`[CTM Agent] Ensuring correct repo_path for local tool ${toolName}`);
+            translatedInput = { ...input };
 
-                // Translate path to file_path if needed
-                if (translatedInput.path) {
-                    translatedInput.file_path = translatedInput.path;
-                    delete translatedInput.path;
-                }
+            // Remove GitHub-style params if present
+            delete translatedInput.owner;
+            delete translatedInput.repo;
 
-                console.log(`[CTM Agent] Translated input:`, translatedInput);
+            // Always use the current config's repoPath
+            translatedInput.repo_path = this.config.repoPath;
+
+            // Translate path to file_path if needed
+            if (translatedInput.path) {
+                translatedInput.file_path = translatedInput.path;
+                delete translatedInput.path;
             }
+
+            console.log(`[CTM Agent] Translated input:`, translatedInput);
         }
 
         // Call the MCP tool
