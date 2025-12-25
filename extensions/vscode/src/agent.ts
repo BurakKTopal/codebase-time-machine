@@ -50,12 +50,12 @@ export class CTMAgent {
     private loadSystemPrompt(): void {
         const fs = require('fs');
         const path = require('path');
-        const claudeMdPath = path.join(__dirname, 'CLAUDE.md');
+        const systemPromptPath = path.join(__dirname, 'SYSTEM_PROMPT.md');
         try {
-            this.systemPrompt = fs.readFileSync(claudeMdPath, 'utf-8');
+            this.systemPrompt = fs.readFileSync(systemPromptPath, 'utf-8');
             console.log(`[CTM Agent] Loaded system prompt: ${this.systemPrompt.length} chars`);
         } catch (error) {
-            console.error('[CTM Agent] Could not load CLAUDE.md:', error);
+            console.error('[CTM Agent] Could not load SYSTEM_PROMPT.md:', error);
             this.systemPrompt = 'You are investigating code. Use get_local_line_context to start.';
         }
     }

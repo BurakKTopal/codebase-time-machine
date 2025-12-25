@@ -168,19 +168,41 @@ Open VS Code Settings (Ctrl+, or Cmd+,) and search for "CTM":
 
 ## Quick Setup Example
 
+### For End Users (Recommended)
+
+```bash
+# 1. Install CTM server
+pip install codebase-time-machine
+
+# 2. Install VS Code extension (from VSIX or Marketplace)
+
+# 3. Configure in VS Code settings:
+#    - ctm.apiKey: your-api-key-here
+#    - ctm.provider: anthropic (or openai/gemini)
+#    - ctm.githubToken: your-github-token (optional)
+
+# Done! Extension uses default settings to run the package.
+```
+
+### For Local Development
+
 ```bash
 # 1. Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. Clone and set up CTM
-git clone https://github.com/burak/codebase-time-machine.git
+git clone https://github.com/burakktopal/codebase-time-machine.git
 cd codebase-time-machine
 uv sync
 
-# 3. Install the VS Code extension (from VSIX)
+# 3. Install VS Code extension
+
 # 4. Configure in VS Code settings:
-#    - ctm.apiKey: your-api-key-here
+#    - ctm.apiKey: your-api-key
 #    - ctm.provider: anthropic (or openai/gemini)
+#    - ctm.serverCommand: uv
+#    - ctm.serverArgs: ["run", "ctm-server"]
+#    - ctm.serverPath: /absolute/path/to/codebase-time-machine
 ```
 
 ---
