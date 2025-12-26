@@ -26,8 +26,7 @@ export interface Evidence {
 }
 
 /**
- * Investigation state - replaces conversation history.
- * This is what gets sent to the model instead of accumulated messages.
+ * Investigation state for continuation and context tracking.
  */
 export interface InvestigationState {
     goal: string;
@@ -39,12 +38,10 @@ export interface InvestigationState {
 }
 
 /**
- * FactStore: The Claude Code secret sauce.
+ * FactStore - Token-efficient storage for investigation context.
  *
- * Instead of keeping raw tool outputs in conversation history (3000 tokens each),
- * we extract durable facts (60 tokens total) and DELETE the evidence.
- *
- * This reduces token usage by 90%+.
+ * Extracts durable facts from tool outputs and discards the raw results.
+ * This keeps context compact while preserving key information.
  */
 export class FactStore {
     private facts: Map<string, Fact> = new Map();
@@ -613,7 +610,6 @@ export class FactStore {
 
     /**
      * Get all facts as a compact string for the model.
-     * This is what replaces the raw tool outputs in conversation.
      */
     getFactsSummary(): string {
         if (this.facts.size === 0) {
@@ -661,7 +657,6 @@ export class FactStore {
 
     /**
      * Get the current investigation state.
-     * This is what gets sent to the model instead of conversation history.
      */
     getState(goal: string, filePath: string, lineRange: string): InvestigationState {
         return {

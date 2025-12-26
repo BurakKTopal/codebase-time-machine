@@ -20,14 +20,14 @@ import {
 export type { AgentConfig, ProgressUpdate, ProgressCallback, InvestigationResult, InvestigationState };
 
 /**
- * CTMAgent - Claude Code Architecture
+ * CTMAgent - Orchestrates code investigation using AI and MCP tools.
  *
- * Key differences from before:
- * 1. Uses FactStore instead of conversation history
- * 2. State-based prompts instead of accumulated messages
- * 3. Tool outputs are extracted → deleted (not kept)
- * 4. Only CORE_TOOLS are sent (not all 35)
- * 5. Provider-agnostic: works with any ILLMProvider
+ * Architecture:
+ * - Uses FactStore for token-efficient state management
+ * - State-based prompts rebuilt each iteration (not accumulated messages)
+ * - Tool outputs are extracted into facts, then discarded
+ * - Only CORE_TOOLS subset is sent to reduce schema size
+ * - Provider-agnostic: works with Anthropic, OpenAI, Gemini
  */
 export class CTMAgent {
     private provider: ILLMProvider;
@@ -98,7 +98,7 @@ export class CTMAgent {
     }
 
     /**
-     * Build state-based prompt - this replaces conversation history
+     * Build state-based prompt from current investigation state.
      */
     private buildStatePrompt(phase: AgentPhase, toolCallCount: number): string {
         const facts = this.factStore.getFactsSummary();
@@ -169,11 +169,11 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
     }
 
     /**
-     * Main investigation loop - Claude Code architecture
+     * Main investigation loop.
      */
     async investigate(): Promise<InvestigationResult> {
         console.log('[CTM Agent] ═══════════════════════════════════════════════════');
-        console.log('[CTM Agent] Starting investigation (Claude Code Architecture)');
+        console.log('[CTM Agent] Starting investigation');
         console.log('[CTM Agent] ═══════════════════════════════════════════════════');
         console.log('[CTM Agent] File:', this.config.filePath);
         console.log('[CTM Agent] Lines:', this.config.lineStart, '-', this.config.lineEnd);
@@ -228,7 +228,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
 
             console.log(`[CTM Agent] Iteration ${iteration} | Phase: ${phase} | Facts: ${this.factStore.getFactCount()} | Tool calls: ${toolCallCount}`);
 
-            // Log what we're sending (should be SMALL now)
+            // Log prompt size
             const promptTokensEstimate = Math.ceil(statePrompt.length / 4);
             console.log(`[CTM Agent] State prompt: ~${promptTokensEstimate} tokens (${statePrompt.length} chars)`);
 

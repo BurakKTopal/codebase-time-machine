@@ -43,11 +43,26 @@ class TestLanguageDetection:
         parser = CodeParser()
         assert parser.detect_language("test.rs") == "rust"
 
+    def test_c_extensions(self):
+        """Test C file extension detection."""
+        parser = CodeParser()
+        assert parser.detect_language("test.c") == "c"
+        assert parser.detect_language("test.h") == "c"
+
+    def test_cpp_extensions(self):
+        """Test C++ file extension detection."""
+        parser = CodeParser()
+        assert parser.detect_language("test.cpp") == "cpp"
+        assert parser.detect_language("test.cc") == "cpp"
+        assert parser.detect_language("test.hpp") == "cpp"
+        assert parser.detect_language("test.hxx") == "cpp"
+
     def test_unsupported_extension(self):
         """Test unsupported file extension returns None."""
         parser = CodeParser()
-        assert parser.detect_language("test.cpp") is None
         assert parser.detect_language("test.java") is None
+        assert parser.detect_language("test.php") is None
+        assert parser.detect_language("test.rb") is None
 
 
 class TestPythonSymbolExtraction:
