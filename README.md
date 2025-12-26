@@ -2,174 +2,207 @@
 
 **Understand why code exists, not just what it does.**
 
-Codebase Time Machine (CTM) is an LLM-agnostic tool server for code history analysis. It helps developers quickly answer the question: *"Why does this code exist?"* by connecting the dots between commits, pull requests, issues, and discussions.
+Codebase Time Machine (CTM) is an MCP server for code history analysis. It connects commits, pull requests, issues, and discussions to answer the question: "Why does this code exist?"
 
 ## Features
 
-- **Line-level context**: Get the full story behind any line of code - blame, PRs, linked issues, discussions
-- **Smart caching**: SQLite-based caching for fast, repeated queries
-- **GitHub integration**: Works with any GitHub repository (public or private with token)
-- **Local git support**: Also works with local repositories without GitHub
-- **Code parsing**: Extract symbols (functions, classes) from Python, JavaScript, TypeScript, Go, Rust, C, C++
-- **VSCode Extension**: Select code and ask "Why does this exist?" directly in your editor
+- **35 investigation tools** for tracing code decisions through git history
+- **Line-level context**: blame, commits, PRs, linked issues, and discussions in one call
+- **SQLite caching** with intelligent TTLs (commits cached forever, PRs/issues for 1 hour)
+- **GitHub integration**: works with public repos, or private repos with a token
+- **Local git support**: also works with local repositories
+- **Code parsing**: extract functions and classes from Python, JavaScript, TypeScript, Go, Rust, C, and C++
+- **MCP protocol**: works with Claude Desktop and any MCP-compatible client
 
-## Quick Start
+## Installation
 
-### Installation
-
-**Recommended: PyPI Installation**
-
-For end users, install via pip or pipx (no uv required):
+**From Test PyPI**
 
 ```bash
-# Option A: pip (simplest)
-pip install codebase-time-machine
+# Option A: pip
+pip install -i https://test.pypi.org/simple/ codebase-time-machine
 
-# Option B: pipx (isolated installation)
-pipx install codebase-time-machine
+# Option B: pipx (isolated environment)
+pipx install -i https://test.pypi.org/simple/ codebase-time-machine
 
 # Verify installation
-ctm-server --version
+python -c "import ctm_mcp_server; print('OK')"
 ```
 
-**Alternative: Local Development**
+Package: https://test.pypi.org/project/codebase-time-machine/
 
-For contributors and development:
+**From source (for development)**
 
 ```bash
-# Clone the repository
 git clone https://github.com/burakktopal/codebase-time-machine.git
 cd codebase-time-machine
 
-# Install uv if you don't have it
-# macOS/Linux:
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Windows:
-# powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# Install uv if needed
+curl -LsSf https://astral.sh/uv/install.sh | sh  # macOS/Linux
+# powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 
-# Install dependencies
 uv sync
-
-# Run server
 uv run ctm-server
 ```
 
-### Set up GitHub token (optional, for private repos)
+## Usage with Claude Desktop
 
-```bash
-export GITHUB_TOKEN=your_token_here
-```
+Add to your Claude Desktop config:
 
-### Usage with Claude Desktop
-
-After installation via pip/pipx, configure Claude Desktop:
-
-**Config location**:
+**Config location:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 - Linux: `~/.config/Claude/claude_desktop_config.json`
 
-**Configuration**:
+**Configuration (PyPI install):**
 ```json
 {
   "mcpServers": {
     "codebase-time-machine": {
-      "command": "ctm-server",
+      "command": "python",
+      "args": [
+        "-m",
+        "ctm_mcp_server.stdio_server"
+      ],
       "env": {
-        "GITHUB_TOKEN": "your_github_token_here"
+        "GITHUB_TOKEN": "your_token_here"
       }
     }
   }
 }
 ```
 
-**For local development** (if using cloned repo):
+**Configuration (from source):**
 ```json
 {
   "mcpServers": {
     "codebase-time-machine": {
       "command": "uv",
-      "args": ["run", "ctm-server"],
-      "cwd": "/absolute/path/to/codebase-time-machine",
+      "args": [
+        "--directory",
+        "/path/to/codebase-time-machine",
+        "run",
+        "ctm-server"
+      ],
       "env": {
-        "GITHUB_TOKEN": "your_github_token_here"
+        "GITHUB_TOKEN": "your_token_here"
       }
     }
   }
 }
 ```
+The `GITHUB_TOKEN` is optional for public repositories but recommended for higher rate limits. 
+**Note**: The Python version Claude Desktop uses must be the same one you used to install codebase-time-machine.
 
-Restart Claude Desktop after updating the config.
+## Tools
 
-### VSCode Extension
+CTM provides 35 tools organized by category:
 
-The VS Code extension automatically detects your installation method:
-- **pip/pipx install** → Runs `ctm-server` directly
-- **uv tool install** → Runs `uv tool run ctm-server`
-- **Local repo** → Runs `uv run ctm-server` in repo directory
+### GitHub Tools
 
-**Setup**:
-1. Install the extension from the `extensions/vscode` folder
-2. Configure your AI provider settings (Anthropic, OpenAI, or Gemini)
-3. Select code in your editor
-4. Run command: "CTM: Why Does This Code Exist?"
+| Tool | Description |
+|------|-------------|
+| `get_line_context` | Why does this line exist? Blame, commit, PR, issues in one call |
+| `get_github_file` | Get file contents |
+| `get_github_file_history` | Commits that modified a file |
+| `get_github_file_symbols` | Extract functions/classes from a file |
+| `get_github_commit` | Get commit details |
+| `get_github_commits_batch` | Fetch multiple commits at once |
+| `get_github_repo` | Repository information |
+| `get_github_branches` | List branches |
+| `list_github_tree` | Browse repository file structure |
+| `get_pr` | Pull request details with comments and reviews |
+| `get_issue` | Issue details with comments |
+| `search_prs_for_commit` | Find PRs containing a commit |
+| `search_github_code` | Search code in repository |
+| `search_github_commits` | Search commit messages |
+| `pickaxe_search_github` | Find when code was added/removed |
+| `trace_github_symbol_history` | Track function/class evolution across commits |
+| `get_code_context` | Full decision chain: file commits, PRs, issues |
+| `get_code_owners` | Top contributors for a file |
+| `get_change_coupling` | Files that frequently change together |
+| `get_activity_summary` | Repository activity overview |
+| `get_recent_activity` | Recent commits for file/directory |
+| `explain_file` | File overview: purpose, symbols, contributors |
+| `explain_directory` | Directory overview and structure |
 
-## How It Works
+### Local Git Tools
 
-CTM uses the Model Context Protocol (MCP) to expose 30+ tools for investigating code history:
-
-| Tool | Speed | Use Case |
-|------|-------|----------|
-| `get_line_context` | Fast | Why does this line exist? (primary tool) |
-| `get_github_file_history` | Fast | What changed in this file? |
-| `explain_file` | Fast | File overview and contributors |
-| `trace_github_symbol_history` | Medium | How did this function evolve? |
-| `get_code_context` | Slow | Full decision chain for a file |
+| Tool | Description |
+|------|-------------|
+| `get_local_line_context` | Line context with auto GitHub remote detection |
+| `get_repo_info` | Repository metadata |
+| `list_branches` | List branches with last commit |
+| `get_commit` | Commit details |
+| `get_commit_diff` | Detailed diff for a commit |
+| `trace_file_history` | Complete file change history |
+| `get_file_at_commit` | File contents at specific commit |
+| `pickaxe_search` | Find when code was added/removed |
+| `explain_commit` | Analyze commit intent (bugfix, feature, refactor) |
+| `blame_with_context` | Enhanced git blame with PR/issue links |
+| `get_file_symbols` | Extract functions/classes from local file |
+| `trace_symbol_history` | Track symbol changes in local repo |
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌───────────────┐     ┌──────────────┐
-│ VSCode Extension│────>│   MCP Server  │────>│ GitHub API   │
-│   (TypeScript)  │     │   (Python)    │     │ Local Git    │
-└─────────────────┘     └───────────────┘     └──────────────┘
-                              │
-                              v
-                        ┌──────────┐
-                        │  Cache   │
-                        │ (SQLite) │
-                        └──────────┘
+┌─────────────────────┐     ┌───────────────────┐     ┌──────────────┐
+│    MCP Client       │────>│   CTM MCP Server  │────>│  GitHub API  │
+│  (Claude Desktop,   │     │     (Python)      │     │  Local Git   │
+│   other clients)    │     └─────────┬─────────┘     └──────────────┘
+└─────────────────────┘               │
+                                      v
+                               ┌──────────────┐
+                               │ SQLite Cache │
+                               │ (~/.ctm/)    │
+                               └──────────────┘
 ```
 
-## Documentation
+## Caching
 
-For detailed usage and tool reference, see [CLAUDE.md](CLAUDE.md).
+CTM uses SQLite for persistent caching. Cache location: `~/.ctm/cache.db`
+
+**TTL strategy:**
+- Commits, git trees: never expire (immutable)
+- File contents at specific commits: never expire (immutable)
+- Repository metadata: 24 hours
+- PRs and issues: 1 hour
+- Search results: 30 minutes
+
+Override cache location with `CTM_CACHE_PATH` environment variable.
+
+## Agent Guide (CLAUDE.md)
+
+The repository includes [CLAUDE.md](CLAUDE.md), an agent guide that teaches LLMs how to use CTM tools effectively. It covers:
+
+- Speed hierarchy (which tools are fast vs slow)
+- Tool selection for different questions
+- Caching strategies and batch operations
+- Response templates and investigation patterns
+
+To use it: copy CLAUDE.md to your project root. Claude Code and similar tools will read it automatically and use CTM tools more effectively.
+
+## VS Code Extension
+
+An optional VS Code extension is available in `extensions/vscode/`. It adds a right-click menu option "Why does this code exist?" that runs CTM analysis on selected code.
+
+See [extensions/vscode/README.md](extensions/vscode/README.md) for setup instructions.
 
 ## Development
 
-📖 **See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for comprehensive guide** including:
-- Building and publishing to PyPI
-- VS Code extension development
-- Testing and code quality
-- Troubleshooting common issues
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full development guide.
 
-**Quick commands**:
+**Quick commands:**
+
 ```bash
-# Install dev dependencies
-uv sync --all-extras
-
-# Run linter
-uv run ruff check ctm_mcp_server --fix
-
-# Run formatter
-uv run ruff format ctm_mcp_server
-
-# Run tests
-uv run pytest
+uv sync --all-extras      # Install dev dependencies
+uv run ruff check ctm_mcp_server --fix  # Lint
+uv run ruff format ctm_mcp_server       # Format
+uv run pytest             # Test
 ```
 
 ## License
 
-AGPL-3.0 - See [LICENSE](LICENSE) for details.
+AGPL-3.0. See [LICENSE](LICENSE) for details.
 
-Copyright (C) 2024 Burak Kucuktopal
+Copyright 2025 Burak Kucuktopal

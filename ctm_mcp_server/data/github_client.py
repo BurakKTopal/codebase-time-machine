@@ -447,7 +447,7 @@ class GitHubClient:
                 "GET",
                 self._repo_path(f"/commits/{sha}/pulls"),
                 # Need to specify the preview header for this endpoint
-                extra_headers={"Accept": "application/vnd.github.groot-preview+json"}
+                extra_headers={"Accept": "application/vnd.github.groot-preview+json"},
             )
 
             # Extract PR numbers from the response
@@ -461,7 +461,9 @@ class GitHubClient:
             # This is less reliable but better than nothing
             try:
                 query = f"repo:{self.owner}/{self.repo} type:pr {sha}"
-                data = await self._request("GET", "/search/issues", params={"q": query, "per_page": 10})
+                data = await self._request(
+                    "GET", "/search/issues", params={"q": query, "per_page": 10}
+                )
                 result = [item.get("number") for item in data.get("items", [])]
             except Exception:
                 result = []
