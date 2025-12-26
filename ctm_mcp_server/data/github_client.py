@@ -128,6 +128,7 @@ class GitHubClient:
         self,
         method: str,
         path: str,
+        extra_headers: dict | None = None,
         **kwargs,
     ) -> dict | list:
         """Make an API request.
@@ -135,6 +136,7 @@ class GitHubClient:
         Args:
             method: HTTP method.
             path: API path.
+            extra_headers: Additional headers to merge with default headers.
             **kwargs: Additional arguments for httpx.
 
         Returns:
@@ -144,6 +146,10 @@ class GitHubClient:
             GitHubClientError: On API errors.
         """
         async with self._get_client() as client:
+            # Merge extra headers if provided
+            if extra_headers:
+                kwargs["headers"] = {**kwargs.get("headers", {}), **extra_headers}
+
             response = await client.request(method, path, **kwargs)
 
             if response.status_code == 404:
@@ -418,24 +424,49 @@ class GitHubClient:
         return comments
 
     async def search_prs_for_commit(self, sha: str) -> list[int]:
-        """Search for PRs that include a commit.
+        """Find PRs that contain a specific commit.
+
+        Uses the GitHub API endpoint /repos/{owner}/{repo}/commits/{sha}/pulls
+        which returns only PRs that actually contain the commit (not just mention it).
 
         Args:
-            sha: Commit SHA.
+            sha: Commit SHA (full or abbreviated).
 
         Returns:
-            List of PR numbers.
+            List of PR numbers that contain this commit.
         """
         # Check cache first
         cached = self._cache_get("github:search_prs_for_commit", sha)
         if cached is not None:
             return cached
 
-        # GitHub search API
-        query = f"repo:{self.owner}/{self.repo} type:pr {sha}"
-        data = await self._request("GET", "/search/issues", params={"q": query, "per_page": 10})
+        try:
+            # Use the proper GitHub API endpoint that returns PRs containing the commit
+            # This is more reliable than the search API which returns text matches
+            data = await self._request(
+                "GET",
+                self._repo_path(f"/commits/{sha}/pulls"),
+                # Need to specify the preview header for this endpoint
+                extra_headers={"Accept": "application/vnd.github.groot-preview+json"},
+            )
 
-        result = [item.get("number") for item in data.get("items", [])]
+            # Extract PR numbers from the response
+            result = [pr.get("number") for pr in data if pr.get("number")]
+
+        except GitHubNotFoundError:
+            # Commit not found in repo - return empty list
+            result = []
+        except GitHubClientError:
+            # Fallback to search API for other errors (e.g., rate limit issues)
+            # This is less reliable but better than nothing
+            try:
+                query = f"repo:{self.owner}/{self.repo} type:pr {sha}"
+                data = await self._request(
+                    "GET", "/search/issues", params={"q": query, "per_page": 10}
+                )
+                result = [item.get("number") for item in data.get("items", [])]
+            except Exception:
+                result = []
 
         # Cache before returning
         self._cache_set("github:search_prs_for_commit", sha, value=result, ttl=self.TTL_VOLATILE)
@@ -1005,6 +1036,115 @@ class GitHubClient:
         )
 
         return result
+
+    async def pickaxe_search(
+        self,
+        search_string: str,
+        path: str | None = None,
+        max_commits: int = 20,
+        regex: bool = False,
+    ) -> dict:
+        """Find commits that introduced or removed a specific string.
+
+        This emulates git's pickaxe feature (git log -S) by analyzing commit diffs
+        via the GitHub API. Note: This is slower than local pickaxe since it must
+        fetch and analyze each commit's diff.
+
+        Args:
+            search_string: The string/code to search for.
+            path: Optional file path to limit the search.
+            max_commits: Maximum number of commits to analyze.
+            regex: If True, treat search_string as a regex pattern.
+
+        Returns:
+            Dictionary with:
+                - commits: List of commits where the string was added/removed
+                - introduction_commit: The oldest commit (likely when code was added)
+                - search_string: The string that was searched
+        """
+        import asyncio
+
+        # Get file history
+        if path:
+            commits_data = await self.list_commits(path=path, per_page=max_commits)
+        else:
+            commits_data = await self.list_commits(per_page=max_commits)
+
+        if not commits_data:
+            return {
+                "commits": [],
+                "introduction_commit": None,
+                "search_string": search_string,
+            }
+
+        matching_commits = []
+
+        # Compile regex if needed
+        if regex:
+            pattern = re.compile(search_string)
+        else:
+            pattern = None
+
+        async def check_commit(commit_summary: dict) -> dict | None:
+            """Check if a commit's diff contains the search string."""
+            sha = commit_summary["sha"]
+            try:
+                commit_detail = await self.get_commit(sha)
+                files = commit_detail.get("files", [])
+
+                for file_info in files:
+                    # If path filter specified, only check that file
+                    if path and file_info.get("path") != path:
+                        continue
+
+                    patch = file_info.get("patch", "")
+                    if not patch:
+                        continue
+
+                    # Check if the search string appears in added/removed lines
+                    if regex and pattern:
+                        if pattern.search(patch):
+                            return commit_detail
+                    else:
+                        if search_string in patch:
+                            return commit_detail
+
+                return None
+            except Exception:
+                return None
+
+        # Check commits in parallel (but limit concurrency)
+        semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
+
+        async def check_with_semaphore(commit: dict) -> dict | None:
+            async with semaphore:
+                return await check_commit(commit)
+
+        results = await asyncio.gather(*[check_with_semaphore(c) for c in commits_data])
+
+        # Filter out None results and collect matching commits
+        for result in results:
+            if result:
+                matching_commits.append(
+                    {
+                        "sha": result["sha"],
+                        "short_sha": result["sha"][:7],
+                        "message": result["message"],
+                        "subject": result["message"].split("\n")[0],
+                        "author": result["author"]["name"],
+                        "date": result["author"]["date"],
+                    }
+                )
+
+        # The introduction commit is the oldest one (last in the list)
+        introduction_commit = matching_commits[-1] if matching_commits else None
+
+        return {
+            "commits": matching_commits,
+            "introduction_commit": introduction_commit,
+            "search_string": search_string,
+            "total_analyzed": len(commits_data),
+        }
 
     @classmethod
     def from_remote_url(cls, remote_url: str, token: str | None = None) -> "GitHubClient":

@@ -7,6 +7,8 @@ Provides a unified interface for parsing code in multiple languages.
 from pathlib import Path
 from typing import Any
 
+import tree_sitter_c
+import tree_sitter_cpp
 import tree_sitter_go
 import tree_sitter_javascript
 import tree_sitter_python
@@ -33,6 +35,8 @@ class CodeParser:
         "typescript": [".ts", ".tsx"],
         "go": [".go"],
         "rust": [".rs"],
+        "c": [".c", ".h"],
+        "cpp": [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".C"],
     }
 
     def __init__(self) -> None:
@@ -62,6 +66,14 @@ class CodeParser:
         # Rust
         self._languages["rust"] = Language(tree_sitter_rust.language())
         self._parsers["rust"] = Parser(self._languages["rust"])
+
+        # C
+        self._languages["c"] = Language(tree_sitter_c.language())
+        self._parsers["c"] = Parser(self._languages["c"])
+
+        # C++
+        self._languages["cpp"] = Language(tree_sitter_cpp.language())
+        self._parsers["cpp"] = Parser(self._languages["cpp"])
 
     def detect_language(self, file_path: str | Path) -> str | None:
         """Detect language from file extension.
@@ -119,6 +131,10 @@ class CodeParser:
             return self._extract_go_symbols(tree, code)
         elif language == "rust":
             return self._extract_rust_symbols(tree, code)
+        elif language == "c":
+            return self._extract_c_symbols(tree, code)
+        elif language == "cpp":
+            return self._extract_cpp_symbols(tree, code)
         else:
             raise ParserError(f"Symbol extraction not implemented for: {language}")
 
@@ -524,6 +540,180 @@ class CodeParser:
                 return
 
             # Visit children
+            for child in node.children:
+                visit(child, parent_name)
+
+        visit(tree.root_node)
+        return symbols
+
+    def _extract_c_symbols(self, tree: Any, code: str) -> list[Symbol]:
+        """Extract symbols from C code."""
+        symbols: list[Symbol] = []
+
+        def visit(node: Any, parent_name: str | None = None) -> None:
+            """Recursively visit nodes."""
+            if node.type == "function_definition":
+                declarator = None
+                for child in node.children:
+                    if child.type == "function_declarator":
+                        declarator = child
+                        break
+
+                if declarator:
+                    name = None
+                    for child in declarator.children:
+                        if child.type == "identifier":
+                            name = code[child.start_byte : child.end_byte]
+                            break
+
+                    if name:
+                        full_name = f"{parent_name}.{name}" if parent_name else name
+                        symbols.append(
+                            Symbol(
+                                name=name,
+                                qualified_name=full_name,
+                                type=SymbolType.FUNCTION,
+                                start_line=node.start_point[0] + 1,
+                                end_line=node.end_point[0] + 1,
+                            )
+                        )
+
+            elif node.type == "struct_specifier":
+                name = None
+                for child in node.children:
+                    if child.type == "type_identifier":
+                        name = code[child.start_byte : child.end_byte]
+                        break
+
+                if name:
+                    symbols.append(
+                        Symbol(
+                            name=name,
+                            qualified_name=name,
+                            type=SymbolType.CLASS,
+                            start_line=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1,
+                        )
+                    )
+
+            elif node.type == "enum_specifier":
+                name = None
+                for child in node.children:
+                    if child.type == "type_identifier":
+                        name = code[child.start_byte : child.end_byte]
+                        break
+
+                if name:
+                    symbols.append(
+                        Symbol(
+                            name=name,
+                            qualified_name=name,
+                            type=SymbolType.CLASS,
+                            start_line=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1,
+                        )
+                    )
+
+            for child in node.children:
+                visit(child, parent_name)
+
+        visit(tree.root_node)
+        return symbols
+
+    def _extract_cpp_symbols(self, tree: Any, code: str) -> list[Symbol]:
+        """Extract symbols from C++ code."""
+        symbols: list[Symbol] = []
+
+        def visit(node: Any, parent_name: str | None = None) -> None:
+            """Recursively visit nodes."""
+            if node.type == "function_definition":
+                declarator = None
+                for child in node.children:
+                    if child.type in ("function_declarator", "qualified_identifier"):
+                        declarator = child
+                        break
+
+                if declarator:
+                    name = None
+                    if declarator.type == "function_declarator":
+                        for child in declarator.children:
+                            if child.type in (
+                                "identifier",
+                                "field_identifier",
+                                "qualified_identifier",
+                            ):
+                                name = code[child.start_byte : child.end_byte]
+                                break
+                    else:
+                        name = code[declarator.start_byte : declarator.end_byte]
+
+                    if name:
+                        full_name = f"{parent_name}.{name}" if parent_name else name
+                        is_method = parent_name is not None
+                        symbol_type = SymbolType.METHOD if is_method else SymbolType.FUNCTION
+
+                        symbols.append(
+                            Symbol(
+                                name=name.split("::")[-1] if "::" in name else name,
+                                qualified_name=full_name,
+                                type=symbol_type,
+                                start_line=node.start_point[0] + 1,
+                                end_line=node.end_point[0] + 1,
+                            )
+                        )
+
+            elif node.type == "class_specifier":
+                name = None
+                for child in node.children:
+                    if child.type == "type_identifier":
+                        name = code[child.start_byte : child.end_byte]
+                        break
+
+                if name:
+                    full_name = f"{parent_name}.{name}" if parent_name else name
+
+                    bases: list[str] = []
+                    for child in node.children:
+                        if child.type == "base_class_clause":
+                            for base_child in child.children:
+                                if base_child.type == "type_identifier":
+                                    bases.append(code[base_child.start_byte : base_child.end_byte])
+
+                    symbols.append(
+                        Symbol(
+                            name=name,
+                            qualified_name=full_name,
+                            type=SymbolType.CLASS,
+                            start_line=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1,
+                            bases=bases,
+                        )
+                    )
+
+                    for child in node.children:
+                        if child.type == "field_declaration_list":
+                            for method in child.children:
+                                visit(method, name)
+                    return
+
+            elif node.type == "struct_specifier":
+                name = None
+                for child in node.children:
+                    if child.type == "type_identifier":
+                        name = code[child.start_byte : child.end_byte]
+                        break
+
+                if name:
+                    symbols.append(
+                        Symbol(
+                            name=name,
+                            qualified_name=name,
+                            type=SymbolType.CLASS,
+                            start_line=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1,
+                        )
+                    )
+
             for child in node.children:
                 visit(child, parent_name)
 

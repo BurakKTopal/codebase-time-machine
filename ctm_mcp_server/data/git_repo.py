@@ -419,6 +419,68 @@ class GitRepo:
         except Exception as e:
             raise GitRepoError(f"Error reading file: {e}") from e
 
+    def pickaxe_search(
+        self,
+        search_string: str,
+        file_path: str | None = None,
+        max_commits: int = 20,
+        regex: bool = False,
+    ) -> list[Commit]:
+        """Find commits that introduced or removed a specific string.
+
+        This uses git's pickaxe feature (git log -S or -G) to find commits
+        where the given string was added or removed. This is the best way
+        to find when a piece of code was first introduced.
+
+        Args:
+            search_string: The string/code to search for.
+            file_path: Optional file path to limit the search.
+            max_commits: Maximum number of commits to return.
+            regex: If True, treat search_string as a regex (uses -G instead of -S).
+
+        Returns:
+            List of commits that added or removed the search string,
+            ordered from newest to oldest.
+
+        Raises:
+            GitRepoError: If the search fails.
+        """
+        try:
+            # Build arguments for git log
+            # GitPython's git.log() handles the executable path properly
+            log_kwargs = {
+                "format": "%H",
+                "n": max_commits,
+            }
+
+            if regex:
+                log_kwargs["G"] = search_string
+            else:
+                log_kwargs["S"] = search_string
+
+            # Execute git log with pickaxe
+            if file_path:
+                output = self._repo.git.log("--", file_path, **log_kwargs)
+            else:
+                output = self._repo.git.log(**log_kwargs)
+
+            if not output.strip():
+                return []
+
+            # Parse commit SHAs and get full commit info
+            commits: list[Commit] = []
+            shas = output.strip().split("\n")
+            for sha in shas:
+                if sha.strip():
+                    commits.append(self.get_commit(sha.strip()))
+
+            return commits
+
+        except GitCommandError as e:
+            raise GitRepoError(f"Pickaxe search failed: {e}") from e
+        except Exception as e:
+            raise GitRepoError(f"Error during pickaxe search: {e}") from e
+
     @staticmethod
     def _extract_pr_number(message: str) -> int | None:
         """Extract PR number from commit message."""

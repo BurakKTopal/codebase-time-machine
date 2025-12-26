@@ -151,3 +151,7 @@ Thumbs.db
 *.db
 *.sqlite
 .ctm_cache/
+.ruff_cache/
+.claude/
+
+docs

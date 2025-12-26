@@ -53,9 +53,7 @@ def filter_relevant_discussions(comments: list[dict]) -> list[dict]:
                     "author": comment.get("user", {}).get("login", ""),
                     "body": comment.get("body", "")[:500],
                     "type": (
-                        "review_comment"
-                        if "pull_request_review_id" in comment
-                        else "pr_comment"
+                        "review_comment" if "pull_request_review_id" in comment else "pr_comment"
                     ),
                     "url": comment.get("html_url", ""),
                 }
@@ -88,9 +86,7 @@ async def build_context_chain(
 
         if pr_numbers and len(pr_numbers) > 0:
             pr_number = (
-                pr_numbers[0]["number"]
-                if isinstance(pr_numbers[0], dict)
-                else pr_numbers[0]
+                pr_numbers[0]["number"] if isinstance(pr_numbers[0], dict) else pr_numbers[0]
             )
             pr_detail = await client.get_pull_request(pr_number)
 
@@ -100,9 +96,7 @@ async def build_context_chain(
                 "body": pr_detail.body or "",
                 "author": pr_detail.user.login if pr_detail.user else "",
                 "state": pr_detail.state,
-                "merged_at": (
-                    pr_detail.merged_at.isoformat() if pr_detail.merged_at else None
-                ),
+                "merged_at": (pr_detail.merged_at.isoformat() if pr_detail.merged_at else None),
                 "html_url": pr_detail.html_url,
             }
 
@@ -180,5 +174,3 @@ def detect_github_remote(repo) -> tuple[str, str] | None:
         pass
 
     return None
-
-

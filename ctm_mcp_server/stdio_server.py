@@ -6,7 +6,9 @@ It exposes all CTM tools to LLM clients like Claude.
 """
 
 import json
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -23,7 +25,16 @@ from ctm_mcp_server.parsing.parser import CodeParser, ParserError
 server = Server("codebase-time-machine")
 
 # Initialize global cache for GitHub API responses
-_cache = get_cache(db_path="ctm_cache.db")
+# Allow override via environment variable, otherwise use user home directory
+cache_path = os.environ.get("CTM_CACHE_PATH")
+if cache_path:
+    db_path = cache_path
+else:
+    cache_dir = Path.home() / ".ctm"
+    cache_dir.mkdir(exist_ok=True)
+    db_path = str(cache_dir / "cache.db")
+
+_cache = get_cache(db_path=db_path)
 
 
 @server.list_tools()
@@ -149,6 +160,74 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="pickaxe_search",
+            description="Find commits that introduced or removed a specific piece of code. Uses git's pickaxe feature (-S) to find when code was first added or last removed. This is the best way to find when a piece of code was originally introduced to the codebase.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the local git repository",
+                    },
+                    "search_string": {
+                        "type": "string",
+                        "description": "The code/string to search for. Can be a function name, variable, or any text that was added/removed.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional: limit search to a specific file (relative to repo root)",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to return (default: 20)",
+                        "default": 20,
+                    },
+                    "regex": {
+                        "type": "boolean",
+                        "description": "If true, treat search_string as a regex pattern (default: false)",
+                        "default": False,
+                    },
+                },
+                "required": ["repo_path", "search_string"],
+            },
+        ),
+        Tool(
+            name="pickaxe_search_github",
+            description="Find commits that introduced or removed a specific piece of code via GitHub API. Slower than local pickaxe_search but works for remote repos without cloning. Analyzes commit diffs to find when code appeared/disappeared.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner (username or organization)",
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name",
+                    },
+                    "search_string": {
+                        "type": "string",
+                        "description": "The code/string to search for in commit diffs",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: limit search to a specific file path",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to analyze (default: 20)",
+                        "default": 20,
+                    },
+                    "regex": {
+                        "type": "boolean",
+                        "description": "If true, treat search_string as a regex pattern (default: false)",
+                        "default": False,
+                    },
+                },
+                "required": ["owner", "repo", "search_string"],
+            },
+        ),
+        Tool(
             name="explain_commit",
             description="Analyze a commit and explain its intent, categorizing it as bugfix, feature, refactor, etc. with confidence score.",
             inputSchema={
@@ -221,6 +300,10 @@ async def list_tools() -> list[Tool]:
                     "history_depth": {
                         "type": "integer",
                         "description": "Number of historical commits to analyze (default: 1). Use 5-10 to find when code was originally added.",
+                    },
+                    "ref": {
+                        "type": "string",
+                        "description": "Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD (current branch).",
                     },
                 },
                 "required": ["repo_path", "file_path", "line_start"],
@@ -854,6 +937,10 @@ async def list_tools() -> list[Tool]:
                         "description": "Number of historical commits to analyze (default: 1 for just blame, 5-10 recommended for finding when code was introduced)",
                         "default": 1,
                     },
+                    "ref": {
+                        "type": "string",
+                        "description": "Git ref (branch, tag, or SHA) to analyze. Defaults to the repository's default branch (usually main or master).",
+                    },
                 },
                 "required": ["owner", "repo", "file_path", "line_start"],
             },
@@ -892,6 +979,23 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["sha"],
                 arguments["file_path"],
             )
+        elif name == "pickaxe_search":
+            result = await _pickaxe_search(
+                arguments["repo_path"],
+                arguments["search_string"],
+                arguments.get("file_path"),
+                arguments.get("max_commits", 20),
+                arguments.get("regex", False),
+            )
+        elif name == "pickaxe_search_github":
+            result = await _pickaxe_search_github(
+                arguments["owner"],
+                arguments["repo"],
+                arguments["search_string"],
+                arguments.get("path"),
+                arguments.get("max_commits", 20),
+                arguments.get("regex", False),
+            )
         elif name == "explain_commit":
             result = await _explain_commit(arguments["repo_path"], arguments["sha"])
         elif name == "blame_with_context":
@@ -909,6 +1013,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("line_end"),
                 arguments.get("include_discussions", True),
                 arguments.get("history_depth", 1),
+                arguments.get("ref"),  # Branch/tag/SHA to analyze
             )
         # GitHub API tools
         elif name == "get_github_repo":
@@ -1058,6 +1163,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("line_end"),
                 arguments.get("include_discussions", True),
                 arguments.get("history_depth", 1),
+                arguments.get("ref"),  # Branch/tag/SHA to analyze
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
@@ -1239,6 +1345,87 @@ async def _get_file_at_commit(repo_path: str, sha: str, file_path: str) -> dict[
         "file_path": file_path,
         "content": content,
         "lines": len(content.splitlines()),
+    }
+
+
+async def _pickaxe_search(
+    repo_path: str,
+    search_string: str,
+    file_path: str | None = None,
+    max_commits: int = 20,
+    regex: bool = False,
+) -> dict[str, Any]:
+    """Find commits that introduced or removed a specific string using git pickaxe."""
+    repo = GitRepo(repo_path)
+    commits = repo.pickaxe_search(
+        search_string=search_string,
+        file_path=file_path,
+        max_commits=max_commits,
+        regex=regex,
+    )
+
+    # Format commits for output
+    formatted_commits = []
+    for commit in commits:
+        formatted_commits.append(
+            {
+                "sha": commit.sha,
+                "short_sha": commit.short_sha,
+                "author": commit.author.name,
+                "date": commit.committed_date.isoformat(),
+                "message": commit.subject,
+                "full_message": commit.message,
+                "pr_number": commit.pr_number,
+                "issue_numbers": commit.issue_numbers,
+                "files_changed": len(commit.files_changed),
+            }
+        )
+
+    # Identify the "introduction" commit (last one in the list = oldest = when code was first added)
+    introduction_commit = formatted_commits[-1] if formatted_commits else None
+
+    return {
+        "success": True,
+        "search_string": search_string,
+        "file_path": file_path,
+        "regex": regex,
+        "total_commits": len(formatted_commits),
+        "commits": formatted_commits,
+        "introduction_commit": introduction_commit,
+        "note": "The 'introduction_commit' is the oldest commit that added/removed this code (likely when it was first introduced). Commits are ordered newest to oldest.",
+    }
+
+
+async def _pickaxe_search_github(
+    owner: str,
+    repo: str,
+    search_string: str,
+    path: str | None = None,
+    max_commits: int = 20,
+    regex: bool = False,
+) -> dict[str, Any]:
+    """Find commits that introduced or removed a specific string via GitHub API.
+
+    This is slower than local pickaxe but works for remote repos.
+    """
+    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
+    result = await client.pickaxe_search(
+        search_string=search_string,
+        path=path,
+        max_commits=max_commits,
+        regex=regex,
+    )
+
+    return {
+        "success": True,
+        "search_string": search_string,
+        "path": path,
+        "regex": regex,
+        "total_analyzed": result.get("total_analyzed", 0),
+        "total_commits": len(result.get("commits", [])),
+        "commits": result.get("commits", []),
+        "introduction_commit": result.get("introduction_commit"),
+        "note": "The 'introduction_commit' is the oldest commit that modified this code (likely when it was first introduced). This uses GitHub API and is slower than local pickaxe_search.",
     }
 
 
@@ -1457,16 +1644,24 @@ async def _get_local_line_context(
     line_end: int | None = None,
     include_discussions: bool = True,
     history_depth: int = 1,
+    ref: str | None = None,
 ) -> dict[str, Any]:
     """Get line context for local repo (bridges to GitHub if remote exists).
 
     If local repo has GitHub remote, uses full get_line_context capabilities.
     Otherwise falls back to basic blame.
+
+    Args:
+        ref: Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD.
     """
     from ctm_mcp_server.utils import detect_github_remote
 
     repo = GitRepo(repo_path)
     github_info = detect_github_remote(repo)
+
+    # If no ref specified, use current branch
+    if ref is None:
+        ref = repo.current_branch or "HEAD"
 
     if github_info:
         # Local repo has GitHub remote - use full context chain
@@ -1479,9 +1674,11 @@ async def _get_local_line_context(
             line_end=line_end or line_start,
             include_discussions=include_discussions,
             history_depth=history_depth,
+            ref=ref,  # Pass the branch to GitHub API
         )
         result["source"] = "github_remote"
         result["remote_url"] = f"https://github.com/{owner}/{repo_name}"
+        result["ref"] = ref
         return result
     else:
         # No GitHub remote - fall back to basic blame
@@ -1493,8 +1690,7 @@ async def _get_local_line_context(
         )
         blame_result["source"] = "local_only"
         blame_result["note"] = (
-            "Local repo without GitHub remote. "
-            "Add a GitHub remote for full PR/issue context."
+            "Local repo without GitHub remote. Add a GitHub remote for full PR/issue context."
         )
         return blame_result
 
@@ -1560,9 +1756,7 @@ async def _get_github_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
     }
 
 
-async def _get_github_commits_batch(
-    owner: str, repo: str, shas: list[str]
-) -> dict[str, Any]:
+async def _get_github_commits_batch(owner: str, repo: str, shas: list[str]) -> dict[str, Any]:
     """Get multiple GitHub commits at once (batch operation).
 
     This is much more efficient than calling _get_github_commit multiple times.
@@ -2899,6 +3093,7 @@ async def _get_line_context(
     line_end: int | None,
     include_discussions: bool,
     history_depth: int = 1,
+    ref: str | None = None,
 ) -> dict[str, Any]:
     """Gather all context about why specific lines exist.
 
@@ -2910,8 +3105,10 @@ async def _get_line_context(
             - 1: Just the most recent commit (fast, but might miss original introduction)
             - 5-10: Analyze recent history to find when code was actually added (recommended)
             - Higher values help find original context when recent commits only modified surrounding code
+        ref: Git ref (branch, tag, or SHA) to analyze. Defaults to default branch.
     """
     line_end = line_end or line_start
+    ref = ref or None  # Use None to get default branch from GitHub API
 
     result: dict[str, Any] = {
         "file_path": file_path,
@@ -2934,7 +3131,7 @@ async def _get_line_context(
 
         # 1. Get current file content
         try:
-            file_data = await client.get_file_contents(file_path)
+            file_data = await client.get_file_contents(file_path, ref=ref)
             content = file_data.get("content", "")
             lines = content.split("\n")
             if line_start <= len(lines):
@@ -2945,7 +3142,7 @@ async def _get_line_context(
         # 2. Get commits for this file (proxy for blame)
         # Fetch more commits if history_depth > 1
         fetch_count = max(50, history_depth * 10)  # Fetch more to have options
-        commits = await client.list_commits(path=file_path, per_page=fetch_count)
+        commits = await client.list_commits(path=file_path, per_page=fetch_count, sha=ref)
 
         if commits:
             # Use most recent commit as blame (simplified - proper blame needs diff analysis)

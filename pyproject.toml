@@ -1,10 +1,10 @@
 [project]
 name = "codebase-time-machine"
-version = "0.1.0"
+version = "0.1.2"
 description = "Understand why code exists, not just what it does - an LLM-agnostic tool server for code history analysis"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = {text = "AGPL-3.0"}
 authors = [
     {name = "Burak Kucuktopal"}
 ]
@@ -12,7 +12,7 @@ keywords = ["git", "code-history", "mcp", "llm", "developer-tools"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -42,6 +42,8 @@ dependencies = [
     "tree-sitter-typescript>=0.21.0",
     "tree-sitter-go>=0.21.0",
     "tree-sitter-rust>=0.21.0",
+    "tree-sitter-c>=0.21.0",
+    "tree-sitter-cpp>=0.21.0",
 
     # CLI
     "typer>=0.9.0",
@@ -77,8 +79,12 @@ langchain = [
     "langchain>=0.1.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/burakktopal/codebase-time-machine"
+Repository = "https://github.com/burakktopal/codebase-time-machine"
+Issues = "https://github.com/burakktopal/codebase-time-machine/issues"
+
 [project.scripts]
-ctm = "ctm_mcp_server.cli:app"
 ctm-server = "ctm_mcp_server.stdio_server:main"
 
 [build-system]
