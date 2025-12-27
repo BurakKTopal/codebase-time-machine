@@ -35,24 +35,9 @@ export class MCPClient {
             // Override with manual serverPath if provided
             if (serverPath) {
                 workingDirectory = serverPath;
-            } else {
-                // Auto-detect: Check if current workspace is CTM repo
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (workspaceFolders) {
-                    const rootPath = workspaceFolders[0].uri.fsPath;
-                    const path = require('path');
-                    const fs = require('fs');
-                    const pyprojectPath = path.join(rootPath, 'pyproject.toml');
-                    if (fs.existsSync(pyprojectPath)) {
-                        const pyproject = fs.readFileSync(pyprojectPath, 'utf-8');
-                        if (pyproject.includes('ctm-server')) {
-                            workingDirectory = rootPath;
-                        }
-                    }
-                }
             }
 
-            // If we have a working directory, create a batch file to handle it
+            // If we have a working directory, create a wrapper script to handle it
             if (workingDirectory) {
                 const path = require('path');
                 const fs = require('fs');
@@ -61,25 +46,13 @@ export class MCPClient {
 
                 const isWindows = process.platform === 'win32';
                 if (isWindows) {
-                    // Create a Node.js wrapper that spawns with windowsHide (unless user wants to see it)
+                    // Create a Node.js wrapper that spawns with correct cwd
                     const wrapperFile = path.join(tmpDir, 'ctm-wrapper.js');
                     const wrapperContent = `const { spawn } = require('child_process');
 
-// Show startup banner
-console.log('='.repeat(60));
 console.log('Codebase Time Machine - MCP Server');
-console.log('='.repeat(60));
-console.log('Server starting...');
 console.log('Working directory: ${workingDirectory.replace(/\\/g, '\\\\')}');
 console.log('Command: ${serverCommand} ${serverArgs.join(' ')}');
-console.log('');
-console.log('This server provides code context analysis via MCP protocol.');
-console.log('It will stay running in the background to serve VS Code requests.');
-console.log('');
-console.log('You can close this window to hide it (server keeps running).');
-console.log('The server will stop when you close VS Code.');
-console.log('='.repeat(60));
-console.log('');
 
 const proc = spawn('${serverCommand}', ${JSON.stringify(serverArgs)}, {
     cwd: '${workingDirectory.replace(/\\/g, '\\\\')}',
@@ -88,8 +61,6 @@ const proc = spawn('${serverCommand}', ${JSON.stringify(serverArgs)}, {
 });
 
 proc.on('exit', code => {
-    console.log('');
-    console.log('MCP Server stopped (exit code: ' + code + ')');
     process.exit(code);
 });`;
                     fs.writeFileSync(wrapperFile, wrapperContent);
@@ -222,31 +193,35 @@ proc.on('exit', code => {
         const fs = require('fs');
         const path = require('path');
 
-        // Priority 1: User manually configured serverCommand (advanced override)
-        const manualCommand = config.get<string>('serverCommand');
-        // 'python' and 'python3' are default values, not manual overrides
-        const hasManualConfig = manualCommand && manualCommand !== 'python' && manualCommand !== 'python3';
+        // Default command from package.json
+        const DEFAULT_COMMAND = ['python', '-m', 'ctm_mcp_server.stdio_server'];
 
-        if (hasManualConfig) {
-            console.log('[CTM] Using manually configured command:', manualCommand);
+        // Get user's serverCommand setting
+        const serverCommand = config.get<string[]>('serverCommand', DEFAULT_COMMAND);
+
+        // Priority 1: User manually configured serverCommand (non-default)
+        const isCustomCommand = JSON.stringify(serverCommand) !== JSON.stringify(DEFAULT_COMMAND);
+
+        if (isCustomCommand && serverCommand.length > 0) {
+            console.log('[CTM] Using manually configured command:', serverCommand.join(' '));
+            const [command, ...args] = serverCommand;
             return {
-                command: manualCommand,
-                args: config.get<string[]>('serverArgs', []),
+                command,
+                args,
                 workingDirectory: serverPath || undefined
             };
         }
 
-        // Priority 2: serverPath is set → Local development mode with uv
+        // Priority 2: serverPath is set - Local development mode with uv
         if (serverPath) {
             const pyprojectPath = path.join(serverPath, 'pyproject.toml');
             if (fs.existsSync(pyprojectPath)) {
                 const pyproject = fs.readFileSync(pyprojectPath, 'utf-8');
                 if (pyproject.includes('ctm-server')) {
                     console.log('[CTM] Local development mode - using uv at:', serverPath);
-                    // Use Python module directly to avoid .exe locking issues on Windows
                     return {
                         command: 'uv',
-                        args: ['run', 'python', '-m', 'ctm_mcp_server.stdio_server'],
+                        args: ['run', 'ctm-server'],
                         workingDirectory: serverPath
                     };
                 }

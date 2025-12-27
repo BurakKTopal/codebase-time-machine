@@ -97,18 +97,17 @@
         },
         "ctm.serverPath": {
           "type": "string",
-          "description": "Path to local CTM repository. Empty (default) = auto-detect pip/pipx package. Set path = use local repo with uv for development.",
+          "description": "Path to local CTM repository for development. Leave empty to use installed package.",
           "default": ""
         },
         "ctm.serverCommand": {
-          "type": "string",
-          "description": "Default uses the PyPI package setup, which uses 'python'. If package setup is not working, consider 'python3' instead. For local repo testing, use 'uv. Override at own risk",
-          "default": "python"
-        },
-        "ctm.serverArgs": {
           "type": "array",
-          "description": "Default uses package setup: ['-m', 'ctm_mcp_server.stdio_server']. For local repo: ['run', 'python', '-m', 'ctm_mcp_server.stdio_server']. Override at own risk",
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Full command to start CTM server. [Edit in settings.json](command:workbench.action.openSettingsJson)\n\n- **PyPI package** (default): `[\"python\", \"-m\", \"ctm_mcp_server.stdio_server\"]`\n- **Local development**: `[\"uv\", \"run\", \"ctm-server\"]`",
           "default": [
+            "python",
             "-m",
             "ctm_mcp_server.stdio_server"
           ]
