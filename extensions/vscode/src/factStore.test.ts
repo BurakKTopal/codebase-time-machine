@@ -176,7 +176,7 @@ describe('FactStore', () => {
             const result = {
                 search_string: 'specialFunction',
                 commits: [
-                    { sha: 'originsha1', author: 'original_author', date: '2023-01-01', message: 'Add specialFunction' }
+                    { sha: 'originsha1234567890', author: 'original_author', date: '2023-01-01', message: 'Add specialFunction' }
                 ]
             };
 
@@ -184,7 +184,7 @@ describe('FactStore', () => {
 
             const facts = factStore.getFactsSummary();
             assert.ok(facts.includes('Pickaxe'));
-            assert.ok(facts.includes('originsha1'));
+            assert.ok(facts.includes('originsh')); // SHA is truncated to 8 chars
             assert.ok(facts.includes('original_author'));
         });
 

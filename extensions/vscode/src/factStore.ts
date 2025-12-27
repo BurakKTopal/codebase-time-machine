@@ -175,7 +175,7 @@ export class FactStore {
                 });
             } else if (result.last_modified_commits && result.last_modified_commits.length > 0) {
                 // Use last_modified_commits (new field name) if available
-                result.last_modified_commits.forEach((bc: any, idx: number) => {
+                result.last_modified_commits.forEach((bc: any, _idx: number) => {
                     const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
                     const commitRef = commitUrl
                         ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
@@ -203,7 +203,7 @@ export class FactStore {
                 }
             } else if (result.blame_commits && result.blame_commits.length > 0) {
                 // Fallback to blame_commits for backwards compatibility
-                result.blame_commits.forEach((bc: any, idx: number) => {
+                result.blame_commits.forEach((bc: any, _idx: number) => {
                     const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
                     const commitRef = commitUrl
                         ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
@@ -299,7 +299,7 @@ export class FactStore {
             // Historical commits (when code was introduced) - INCLUDE SHAs
             if (result.historical_commits && result.historical_commits.length > 0) {
                 // Store all historical commit SHAs so agent can reference them
-                result.historical_commits.forEach((commit: any, idx: number) => {
+                result.historical_commits.forEach((commit: any, _idx: number) => {
                     if (commit.sha) {
                         const commitUrl = githubBaseUrl ? `${githubBaseUrl}/commit/${commit.sha}` : null;
                         const commitRef = commitUrl

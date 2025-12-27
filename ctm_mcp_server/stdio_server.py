@@ -1284,16 +1284,17 @@ def _strip_comment_markers(text: str) -> str:
     (e.g., /* */ to // or vice versa).
     """
     import re
+
     # Remove common comment prefixes/suffixes
     text = text.strip()
     # Block comments: /* ... */ or /** ... */
-    text = re.sub(r'^/\*+\s*', '', text)
-    text = re.sub(r'\s*\*+/$', '', text)
+    text = re.sub(r"^/\*+\s*", "", text)
+    text = re.sub(r"\s*\*+/$", "", text)
     # Line comments: // or #
-    text = re.sub(r'^//\s*', '', text)
-    text = re.sub(r'^#\s*', '', text)
+    text = re.sub(r"^//\s*", "", text)
+    text = re.sub(r"^#\s*", "", text)
     # Leading asterisks in block comments (e.g., * line)
-    text = re.sub(r'^\*\s*', '', text)
+    text = re.sub(r"^\*\s*", "", text)
     return text.strip()
 
 
@@ -1794,7 +1795,9 @@ async def _get_local_line_context(
                     "message": ci.get("message", line.commit_message),
                     "pr_number": ci.get("pr_number"),
                     "html_url": f"{github_base_url}/commit/{sha}" if github_base_url else None,
-                    "pr_url": f"{github_base_url}/pull/{ci.get('pr_number')}" if github_base_url and ci.get("pr_number") else None,
+                    "pr_url": f"{github_base_url}/pull/{ci.get('pr_number')}"
+                    if github_base_url and ci.get("pr_number")
+                    else None,
                 }
             else:
                 # Extend current section
@@ -1809,8 +1812,11 @@ async def _get_local_line_context(
         # Convert content arrays to strings
         for section in code_sections:
             section["content"] = "\n".join(section["content"])
-            section["line_range"] = f"{section['line_start']}-{section['line_end']}" if section["line_start"] != section["line_end"] else str(section["line_start"])
-
+            section["line_range"] = (
+                f"{section['line_start']}-{section['line_end']}"
+                if section["line_start"] != section["line_end"]
+                else str(section["line_start"])
+            )
 
         # AUTO-PICKAXE: Find true origin for each code section
         # This eliminates the need for the agent to manually call pickaxe_search
@@ -1821,8 +1827,11 @@ async def _get_local_line_context(
                 # Use the longest non-trivial line for better search accuracy
                 content_lines = section["content"].split("\n")
                 search_candidates = [
-                    line.strip() for line in content_lines
-                    if len(line.strip()) > 15 and not line.strip().startswith("//") and not line.strip().startswith("#")
+                    line.strip()
+                    for line in content_lines
+                    if len(line.strip()) > 15
+                    and not line.strip().startswith("//")
+                    and not line.strip().startswith("#")
                 ]
                 if search_candidates:
                     # Use the longest line as it's most distinctive
@@ -1848,15 +1857,21 @@ async def _get_local_line_context(
                             "author": origin_commit.author.name,
                             "date": origin_commit.committed_date.isoformat(),
                             "message": _truncate(origin_commit.subject, 100),
-                            "html_url": f"{github_base_url}/commit/{origin_sha}" if github_base_url else None,
-                            "search_string_used": search_string[:50] + "..." if len(search_string) > 50 else search_string,
+                            "html_url": f"{github_base_url}/commit/{origin_sha}"
+                            if github_base_url
+                            else None,
+                            "search_string_used": search_string[:50] + "..."
+                            if len(search_string) > 50
+                            else search_string,
                             "is_same_as_last_modified": origin_sha == section["commit_sha"],
                         }
                         # Add PR info if available
-                        if hasattr(origin_commit, 'pr_number') and origin_commit.pr_number:
+                        if hasattr(origin_commit, "pr_number") and origin_commit.pr_number:
                             section["origin"]["pr_number"] = origin_commit.pr_number
                             if github_base_url:
-                                section["origin"]["pr_url"] = f"{github_base_url}/pull/{origin_commit.pr_number}"
+                                section["origin"]["pr_url"] = (
+                                    f"{github_base_url}/pull/{origin_commit.pr_number}"
+                                )
             except Exception as e:
                 # Pickaxe failed for this section - not critical, continue
                 section["origin_error"] = str(e)
@@ -1927,18 +1942,28 @@ async def _get_local_line_context(
                 # Skip the first if it matches primary (avoid duplicate)
                 for commit in historical:
                     if commit.sha != primary_sha:
-                        result["historical_commits"].append({
-                            "sha": commit.sha,
-                            "message": _truncate(commit.subject, 300),
-                            "author": commit.author.name,
-                            "date": commit.committed_date.isoformat(),
-                            "message_signals": _extract_message_signals(commit.message),
-                            "stats": {
-                                "additions": sum(f.additions for f in commit.files_changed if hasattr(f, 'additions')),
-                                "deletions": sum(f.deletions for f in commit.files_changed if hasattr(f, 'deletions')),
-                                "total": len(commit.files_changed),
-                            },
-                        })
+                        result["historical_commits"].append(
+                            {
+                                "sha": commit.sha,
+                                "message": _truncate(commit.subject, 300),
+                                "author": commit.author.name,
+                                "date": commit.committed_date.isoformat(),
+                                "message_signals": _extract_message_signals(commit.message),
+                                "stats": {
+                                    "additions": sum(
+                                        f.additions
+                                        for f in commit.files_changed
+                                        if hasattr(f, "additions")
+                                    ),
+                                    "deletions": sum(
+                                        f.deletions
+                                        for f in commit.files_changed
+                                        if hasattr(f, "deletions")
+                                    ),
+                                    "total": len(commit.files_changed),
+                                },
+                            }
+                        )
                 if result["historical_commits"]:
                     result["context_availability"]["available"].append("historical_commits")
                     result["context_availability"]["suggestions"].append(
@@ -1993,7 +2018,11 @@ async def _get_local_line_context(
                 # Find linked issues from multiple sources:
                 # 1. Text-based: Parse PR title, body, and commit message for issue references
                 issue_refs_text = _extract_issue_references(
-                    (pr_detail.title or "") + " " + (pr_detail.body or "") + " " + primary_line.commit_message
+                    (pr_detail.title or "")
+                    + " "
+                    + (pr_detail.body or "")
+                    + " "
+                    + primary_line.commit_message
                 )
                 # 2. API-based: Get issues linked via GitHub's Development sidebar
                 try:
@@ -2008,15 +2037,17 @@ async def _get_local_line_context(
                 for issue_num in issue_refs[:3]:
                     try:
                         issue = await client.get_issue(issue_num)
-                        result["linked_issues"].append({
-                            "number": issue_num,
-                            "title": issue.title,
-                            "body": issue.body[:500] if issue.body else None,
-                            "author": issue.author.login if issue.author else None,
-                            "labels": [label.name for label in issue.labels],
-                            "state": issue.state,
-                            "html_url": issue.html_url,
-                        })
+                        result["linked_issues"].append(
+                            {
+                                "number": issue_num,
+                                "title": issue.title,
+                                "body": issue.body[:500] if issue.body else None,
+                                "author": issue.author.login if issue.author else None,
+                                "labels": [label.name for label in issue.labels],
+                                "state": issue.state,
+                                "html_url": issue.html_url,
+                            }
+                        )
                     except Exception:
                         pass
 
@@ -2350,24 +2381,28 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
     for pr_num in pr_numbers[:5]:  # Limit to first 5 PRs to avoid too many API calls
         try:
             pr_detail = await client.get_pull_request(pr_num)
-            prs_with_details.append({
-                "number": pr_num,
-                "title": pr_detail.title,
-                "state": pr_detail.state,
-                "author": pr_detail.author.login if pr_detail.author else None,
-                "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
-                "merged_at": pr_detail.merged_at.isoformat() if pr_detail.merged_at else None,
-                "body": _truncate(pr_detail.body or "", 300),
-            })
+            prs_with_details.append(
+                {
+                    "number": pr_num,
+                    "title": pr_detail.title,
+                    "state": pr_detail.state,
+                    "author": pr_detail.author.login if pr_detail.author else None,
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
+                    "merged_at": pr_detail.merged_at.isoformat() if pr_detail.merged_at else None,
+                    "body": _truncate(pr_detail.body or "", 300),
+                }
+            )
         except Exception:
             # If we can't get details, include just the number
-            prs_with_details.append({
-                "number": pr_num,
-                "title": None,
-                "state": None,
-                "author": None,
-                "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
-            })
+            prs_with_details.append(
+                {
+                    "number": pr_num,
+                    "title": None,
+                    "state": None,
+                    "author": None,
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
+                }
+            )
 
     return {
         "success": True,
@@ -3375,7 +3410,11 @@ async def _get_line_context(
                     # 5. Find linked issues from multiple sources:
                     # a. Text-based: Parse PR title, body, and commit message
                     issue_refs_text = _extract_issue_references(
-                        (pr_detail.title or "") + " " + (pr_detail.body or "") + " " + blame_commit_data["message"]
+                        (pr_detail.title or "")
+                        + " "
+                        + (pr_detail.body or "")
+                        + " "
+                        + blame_commit_data["message"]
                     )
                     # b. API-based: Get issues linked via GitHub's Development sidebar
                     try:
@@ -3485,7 +3524,9 @@ def _extract_issue_references(text: str) -> list[int]:
         issues.add(int(m))
 
     # "fixes/closes/resolves issue 123" or "fixes/closes/resolves 123"
-    for m in re.findall(r"(?:fix(?:es)?|close[sd]?|resolve[sd]?)\s+(?:issue\s+)?#?(\d+)", text, re.I):
+    for m in re.findall(
+        r"(?:fix(?:es)?|close[sd]?|resolve[sd]?)\s+(?:issue\s+)?#?(\d+)", text, re.I
+    ):
         issues.add(int(m))
 
     # "issue 123" or "issue #123"

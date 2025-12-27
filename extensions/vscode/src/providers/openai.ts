@@ -8,8 +8,6 @@ import {
     LLMResponse,
     LLMModel,
     LLMContentBlock,
-    LLMTextBlock,
-    LLMToolUseBlock,
     ProviderConfig,
     StreamCallback,
     LLMTool
@@ -126,7 +124,7 @@ export class OpenAIProvider implements ILLMProvider {
         // Accumulated content for final response
         const contentBlocks: LLMContentBlock[] = [];
         let currentText = '';
-        let currentToolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
+        const currentToolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
         let finishReason = 'stop';
         let promptTokens = 0;
         let completionTokens = 0;
@@ -214,7 +212,7 @@ export class OpenAIProvider implements ILLMProvider {
             contentBlocks.push({ type: 'text', text: currentText });
         }
 
-        for (const [_, tc] of currentToolCalls) {
+        for (const tc of currentToolCalls.values()) {
             let parsedArgs = {};
             try {
                 parsedArgs = JSON.parse(tc.arguments || '{}');

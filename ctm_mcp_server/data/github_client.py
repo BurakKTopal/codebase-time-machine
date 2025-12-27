@@ -1174,7 +1174,9 @@ class GitHubClient:
         # Semaphore for limiting concurrent API requests
         semaphore = asyncio.Semaphore(5)
 
-        async def check_commit(commit_summary: dict, check_path: str | None) -> tuple[dict | None, str | None]:
+        async def check_commit(
+            commit_summary: dict, check_path: str | None
+        ) -> tuple[dict | None, str | None]:
             """Check if a commit's diff contains the search string.
             Returns (commit_detail, previous_path) where previous_path is set if a rename was detected.
             """
@@ -1191,7 +1193,7 @@ class GitHubClient:
                     # Track renames - check both current path and previous path
                     if check_path:
                         # Check if this file matches our search path
-                        is_target_file = (file_path == check_path)
+                        is_target_file = file_path == check_path
                         # Also check if this is a rename TO our path (meaning the previous_path is what we want)
                         if file_info.get("status") == "renamed" and file_path == check_path:
                             detected_previous_path = file_info.get("previous_path")
