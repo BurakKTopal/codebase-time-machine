@@ -2,7 +2,9 @@
 
 from typing import Any
 
+from ctm_mcp_server.data.git_repo import GitRepo
 from ctm_mcp_server.data.github_client import GitHubClient, GitHubClientError
+from ctm_mcp_server.models.github_models import Comment
 
 
 def truncate(text: str | None, max_len: int = 500) -> str | None:
@@ -29,7 +31,9 @@ def extract_message_signals(message: str) -> list[str]:
     return signals
 
 
-def filter_relevant_discussions(comments: list[dict]) -> list[dict]:
+def filter_relevant_discussions(
+    comments: list[dict[str, Any]] | list[Comment],
+) -> list[dict[str, Any]]:
     """Filter PR/issue comments for decision-making discussions."""
     decision_keywords = [
         "instead",
@@ -44,18 +48,29 @@ def filter_relevant_discussions(comments: list[dict]) -> list[dict]:
         "trade-off",
     ]
 
-    relevant = []
+    relevant: list[dict[str, Any]] = []
     for comment in comments:
-        body = (comment.get("body") or "").lower()
+        # Handle both Comment objects and dicts
+        if isinstance(comment, Comment):
+            body = (comment.body or "").lower()
+            author = comment.author.login if comment.author else ""
+            comment_body = comment.body or ""
+            has_review_id = comment.commit_sha is not None  # Review comments have commit_sha
+            html_url = ""  # Comment model doesn't have html_url
+        else:
+            body = (comment.get("body") or "").lower()
+            author = comment.get("user", {}).get("login", "")
+            comment_body = comment.get("body", "")
+            has_review_id = "pull_request_review_id" in comment
+            html_url = comment.get("html_url", "")
+
         if any(kw in body for kw in decision_keywords):
             relevant.append(
                 {
-                    "author": comment.get("user", {}).get("login", ""),
-                    "body": comment.get("body", "")[:500],
-                    "type": (
-                        "review_comment" if "pull_request_review_id" in comment else "pr_comment"
-                    ),
-                    "url": comment.get("html_url", ""),
+                    "author": author,
+                    "body": comment_body[:500],
+                    "type": "review_comment" if has_review_id else "pr_comment",
+                    "url": html_url,
                 }
             )
 
@@ -75,7 +90,7 @@ async def build_context_chain(
     """
     import re
 
-    result = {
+    result: dict[str, Any] = {
         "pull_request": None,
         "linked_issues": [],
         "discussions": [],
@@ -94,7 +109,7 @@ async def build_context_chain(
                 "number": pr_number,
                 "title": pr_detail.title,
                 "body": pr_detail.body or "",
-                "author": pr_detail.user.login if pr_detail.user else "",
+                "author": pr_detail.author.login if pr_detail.author else "",
                 "state": pr_detail.state,
                 "merged_at": (pr_detail.merged_at.isoformat() if pr_detail.merged_at else None),
                 "html_url": pr_detail.html_url,
@@ -107,17 +122,18 @@ async def build_context_chain(
             issue_refs += re.findall(r"(?:^|\s)#(\d+)", pr_body)
             unique_issues = list(set(issue_refs))[:max_issues_per_pr]
 
+            linked_issues: list[dict[str, Any]] = result["linked_issues"]
             for issue_num_str in unique_issues:
                 try:
                     issue_num = int(issue_num_str)
                     issue = await client.get_issue(issue_num)
 
-                    result["linked_issues"].append(
+                    linked_issues.append(
                         {
                             "number": issue.number,
                             "title": issue.title,
                             "body": truncate(issue.body, 1000),
-                            "author": issue.user.login if issue.user else "",
+                            "author": issue.author.login if issue.author else "",
                             "state": issue.state,
                             "created_at": issue.created_at.isoformat(),
                             "html_url": issue.html_url,
@@ -141,7 +157,7 @@ async def build_context_chain(
     return result
 
 
-def detect_github_remote(repo) -> tuple[str, str] | None:
+def detect_github_remote(repo: GitRepo) -> tuple[str, str] | None:
     """Detect GitHub remote from local repo.
 
     Args:

@@ -8,16 +8,16 @@ from ctm_mcp_server.data.git_repo import GitRepoError
 from ctm_mcp_server.data.github_client import GitHubClientError
 
 
-def ctm_tool(func: Callable) -> Callable:
+def ctm_tool(func: Callable[..., Any]) -> Callable[..., Any]:
     """Standardize error handling and response format."""
 
     @functools.wraps(func)
-    async def wrapper(*args, **kwargs) -> dict[str, Any]:
+    async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
             result = await func(*args, **kwargs)
             if isinstance(result, dict) and "success" not in result:
                 result["success"] = True
-            return result
+            return result  # type: ignore[no-any-return]
 
         except GitHubClientError as e:
             return {
@@ -47,12 +47,12 @@ def ctm_tool(func: Callable) -> Callable:
     return wrapper
 
 
-def require_params(*param_names: str) -> Callable:
+def require_params(*param_names: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Validate required parameters are present and non-empty."""
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> dict[str, Any]:
+        async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
             import inspect
 
             sig = inspect.signature(func)
@@ -72,7 +72,7 @@ def require_params(*param_names: str) -> Callable:
                     "error_type": "validation",
                 }
 
-            return await func(*args, **kwargs)
+            return await func(*args, **kwargs)  # type: ignore[no-any-return]
 
         return wrapper
 

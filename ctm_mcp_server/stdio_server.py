@@ -18,6 +18,7 @@ from mcp.types import TextContent, Tool
 from ctm_mcp_server.data.cache import get_cache
 from ctm_mcp_server.data.git_repo import GitRepo, GitRepoError
 from ctm_mcp_server.data.github_client import GitHubClient, GitHubClientError
+from ctm_mcp_server.models.github_models import Comment
 from ctm_mcp_server.models.result_models import IntentType
 from ctm_mcp_server.parsing.parser import CodeParser, ParserError
 
@@ -1384,7 +1385,7 @@ async def _pickaxe_search(
     # Identify the "introduction" commit (last one in the list = oldest = when code was first added)
     introduction_commit = formatted_commits[-1] if formatted_commits else None
 
-    result = {
+    result: dict[str, Any] = {
         "success": True,
         "search_string": search_string,
         "file_path": file_path,
@@ -2964,7 +2965,7 @@ async def _get_change_coupling(
         }
 
     # Calculate coupling ratio and filter
-    coupled_files = []
+    coupled_files: list[dict[str, Any]] = []
     for file_path, count in co_changes.items():
         coupling_ratio = count / total_commits_analyzed
         if coupling_ratio >= min_coupling:
@@ -3473,7 +3474,9 @@ def _extract_message_signals(message: str) -> list[str]:
     return signals
 
 
-def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
+def _filter_relevant_discussions(
+    comments: list[dict[str, Any]] | list[Comment],
+) -> list[dict[str, Any]]:
     """Filter to discussions indicating decisions/alternatives."""
     decision_keywords = [
         "instead",
@@ -3488,18 +3491,29 @@ def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
         "trade-off",
     ]
 
-    relevant = []
+    relevant: list[dict[str, Any]] = []
     for comment in comments:
-        body = (comment.get("body") or "").lower()
+        # Handle both Comment objects and dicts
+        if isinstance(comment, Comment):
+            body = (comment.body or "").lower()
+            author = comment.author.login if comment.author else ""
+            comment_body = comment.body or ""
+            has_review_id = comment.commit_sha is not None
+            html_url = ""
+        else:
+            body = (comment.get("body") or "").lower()
+            author = comment.get("user", {}).get("login", "")
+            comment_body = comment.get("body", "")
+            has_review_id = "pull_request_review_id" in comment
+            html_url = comment.get("html_url", "")
+
         if any(kw in body for kw in decision_keywords):
             relevant.append(
                 {
-                    "author": comment.get("user", {}).get("login", ""),
-                    "body": comment.get("body", "")[:500],
-                    "type": (
-                        "review_comment" if "pull_request_review_id" in comment else "pr_comment"
-                    ),
-                    "url": comment.get("html_url", ""),
+                    "author": author,
+                    "body": comment_body[:500],
+                    "type": "review_comment" if has_review_id else "pr_comment",
+                    "url": html_url,
                 }
             )
 

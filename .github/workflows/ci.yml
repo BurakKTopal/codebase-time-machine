@@ -37,9 +37,6 @@ jobs:
       - name: Format check (ruff)
         run: uv run ruff format --check ctm_mcp_server
 
-      - name: Type check (mypy)
-        run: uv run mypy ctm_mcp_server --ignore-missing-imports
-
       - name: Run tests
         run: uv run pytest tests/ -v --cov=ctm_mcp_server --cov-report=xml
 

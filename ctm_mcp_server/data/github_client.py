@@ -7,6 +7,7 @@ Provides access to GitHub PRs, issues, and comments using the GitHub REST API.
 import os
 import re
 from datetime import datetime
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
@@ -89,7 +90,7 @@ class GitHubClient:
         if self.token:
             self._headers["Authorization"] = f"Bearer {self.token}"
 
-    def _cache_get(self, namespace: str, *args) -> dict | None:
+    def _cache_get(self, namespace: str, *args: Any) -> Any | None:
         """Get value from cache if cache is enabled.
 
         Args:
@@ -97,19 +98,19 @@ class GitHubClient:
             *args: Additional cache key components (e.g., pr_number).
 
         Returns:
-            Cached value as dict, or None if not cached or cache disabled.
+            Cached value, or None if not cached or cache disabled.
         """
         if not self.cache:
             return None
         return self.cache.get(namespace, self.owner, self.repo, *args)
 
-    def _cache_set(self, namespace: str, *args, value: dict, ttl: int | None = None) -> None:
+    def _cache_set(self, namespace: str, *args: Any, value: Any, ttl: int | None = None) -> None:
         """Set value in cache if cache is enabled.
 
         Args:
             namespace: Cache namespace (e.g., "github:get_pull_request").
             *args: Additional cache key components (e.g., pr_number).
-            value: Value to cache (must be dict for JSON serialization).
+            value: Value to cache (must be JSON-serializable).
             ttl: Time-to-live in seconds, or None for no expiration.
         """
         if self.cache:
@@ -128,9 +129,9 @@ class GitHubClient:
         self,
         method: str,
         path: str,
-        extra_headers: dict | None = None,
-        **kwargs,
-    ) -> dict | list:
+        extra_headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """Make an API request.
 
         Args:
@@ -140,7 +141,7 @@ class GitHubClient:
             **kwargs: Additional arguments for httpx.
 
         Returns:
-            JSON response.
+            JSON response (dict or list depending on endpoint).
 
         Raises:
             GitHubClientError: On API errors.
@@ -166,7 +167,7 @@ class GitHubClient:
 
             return response.json()
 
-    async def _graphql_request(self, query: str, variables: dict | None = None) -> dict:
+    async def _graphql_request(self, query: str, variables: dict[str, Any] | None = None) -> Any:
         """Make a GraphQL API request.
 
         Args:
@@ -470,7 +471,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:search_prs_for_commit", sha)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]  # type: ignore[no-any-return]
 
         try:
             # Use the proper GitHub API endpoint that returns PRs containing the commit
@@ -541,7 +542,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:get_pr_linked_issues", pr_number)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]  # type: ignore[no-any-return]
 
         linked_issues: list[int] = []
 
@@ -580,7 +581,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:get_repo_info")
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         data = await self._request("GET", self._repo_path(""))
         result = {
@@ -617,7 +618,7 @@ class GitHubClient:
         # Check cache first (commits are immutable)
         cached = self._cache_get("github:get_commit", sha)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         data = await self._request("GET", self._repo_path(f"/commits/{sha}"))
 
@@ -752,7 +753,7 @@ class GitHubClient:
         cache_key_params = (path or "", sha or "", per_page, page)
         cached = self._cache_get("github:list_commits", *cache_key_params)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         params: dict[str, str | int] = {"per_page": per_page, "page": page}
         if path:
@@ -806,7 +807,7 @@ class GitHubClient:
         # Check cache first (include path and ref in cache key)
         cached = self._cache_get("github:get_file_contents", path, ref or "")
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         params = {}
         if ref:
@@ -870,7 +871,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:get_branches", per_page)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         data = await self._request(
             "GET",
@@ -909,7 +910,7 @@ class GitHubClient:
         # Check cache first (tree_sha might be resolved, so cache by original input)
         cached = self._cache_get("github:get_tree", tree_sha, recursive)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         original_tree_sha = tree_sha
 
@@ -995,7 +996,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:search_code", query, per_page, page)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         # Scope to this repository
         full_query = f"repo:{self.owner}/{self.repo} {query}"
@@ -1056,7 +1057,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:search_commits", query, per_page, page)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         # Scope to this repository
         full_query = f"repo:{self.owner}/{self.repo} {query}"
