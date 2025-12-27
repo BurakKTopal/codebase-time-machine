@@ -450,12 +450,21 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(shortSha || 'blame'));
                 const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes(shortSha || 'blame'));
 
+                // Get SHA for URL construction
+                const fullSha = blameEvidence?.verbatim || shaMatch?.[1] || null;
+
+                // Construct html_url: from markdown link, or build from owner/repo
+                let htmlUrl = urlMatch?.[2] || null;
+                if (!htmlUrl && fullSha && this.config.owner && this.config.repo) {
+                    htmlUrl = `https://github.com/${this.config.owner}/${this.config.repo}/commit/${fullSha}`;
+                }
+
                 const blameInfo = {
-                    sha: blameEvidence?.verbatim || shaMatch?.[1] || null,
+                    sha: fullSha,
                     author: authorEvidence?.verbatim || authorMatch?.[1]?.trim() || null,
                     date: timestampEvidence?.verbatim || dateMatch?.[1] || null,
                     message: messageMatch?.[1] || null,
-                    html_url: urlMatch?.[2] || null,
+                    html_url: htmlUrl,
                     lines: linesMatch?.[1]?.split(',').map((l: string) => parseInt(l.trim())) || null,
                     summary: fact.text
                 };

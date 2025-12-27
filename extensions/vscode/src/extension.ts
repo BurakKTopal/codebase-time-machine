@@ -95,6 +95,13 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
             const filePath = getRelativePath(editor.document.fileName, repoInfo.rootPath);
             console.log('[CTM] Step 2: File path (relative to git root):', filePath);
 
+            // Show loading panel early so user can see progress
+            const lineRange = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+            if (!currentPanel) {
+                currentPanel = new ContextPanel();
+            }
+            currentPanel.showLoading(filePath, lineRange);
+
             // Step 2.5: Check for uncommitted changes
             progress.report({ increment: 25, message: "Checking for uncommitted changes..." });
             console.log('[CTM] Step 2.5: Checking if file has uncommitted changes');
@@ -201,6 +208,11 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                     increment: increment * 0.4, // Scale to fit within our progress range (50-90%)
                     message: update.message
                 });
+
+                // Also update the panel's loading progress
+                if (currentPanel) {
+                    currentPanel.updateProgress(update.message, update.percentage, update.currentTool);
+                }
             });
 
             let summary;
@@ -238,11 +250,6 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
             // Store agent and summary for follow-up questions
             currentAgent = agent;
             currentSummary = summary;
-
-            // Create or reuse panel
-            if (!currentPanel) {
-                currentPanel = new ContextPanel();
-            }
 
             // Set up follow-up handler with streaming support
             currentPanel.setFollowUpHandler(async (question: string, onProgress: ProgressCallback, onStream: StreamCallback) => {

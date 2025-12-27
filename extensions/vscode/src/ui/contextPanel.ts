@@ -10,12 +10,55 @@ export class ContextPanel {
     private panel: vscode.WebviewPanel | undefined;
     private onFollowUp: FollowUpHandler | undefined;
     private conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    private messageHandlerDisposable: vscode.Disposable | undefined;
 
     /**
      * Set the handler for follow-up questions
      */
     setFollowUpHandler(handler: FollowUpHandler): void {
         this.onFollowUp = handler;
+    }
+
+    /**
+     * Show the panel in loading state (before investigation completes)
+     */
+    showLoading(filePath: string, lineRange: string): void {
+        this.conversationHistory = [];
+
+        if (this.panel) {
+            this.panel.reveal(vscode.ViewColumn.Beside);
+        } else {
+            this.panel = vscode.window.createWebviewPanel(
+                'ctmContext',
+                'Code Context',
+                vscode.ViewColumn.Beside,
+                {
+                    enableScripts: true,
+                    retainContextWhenHidden: true
+                }
+            );
+
+            this.panel.onDidDispose(() => {
+                this.panel = undefined;
+                this.onFollowUp = undefined;
+            });
+        }
+
+        this.panel.webview.html = this.getLoadingHtml(filePath, lineRange);
+    }
+
+    /**
+     * Update the loading progress
+     */
+    updateProgress(message: string, percentage: number, currentTool?: string): void {
+        if (!this.panel) return;
+
+        this.panel.webview.postMessage({
+            command: 'updateProgress',
+            message,
+            percentage,
+            currentTool
+        });
     }
 
     show(summary: string, rawContext: any, _extensionUri: vscode.Uri): void {
@@ -38,70 +81,85 @@ export class ContextPanel {
             this.panel.onDidDispose(() => {
                 this.panel = undefined;
                 this.onFollowUp = undefined;
+                this.messageHandlerDisposable = undefined;
             });
+        }
 
-            // Set up message handler
-            this.panel.webview.onDidReceiveMessage(
-                async (message) => {
-                    // Handle /model command
-                    if (message.command === 'changeModel') {
-                        console.log('[ContextPanel] Received change model request');
+        // Always set up message handler (dispose old one first)
+        this.setupMessageHandler();
+
+        this.panel.webview.html = this.getHtmlContent(summary, rawContext);
+    }
+
+    /**
+     * Set up the webview message handler for follow-up questions
+     */
+    private setupMessageHandler(): void {
+        if (!this.panel) return;
+
+        // Dispose old handler if exists
+        if (this.messageHandlerDisposable) {
+            this.messageHandlerDisposable.dispose();
+        }
+
+        this.messageHandlerDisposable = this.panel.webview.onDidReceiveMessage(
+            async (message) => {
+                // Handle /model command
+                if (message.command === 'changeModel') {
+                    console.log('[ContextPanel] Received change model request');
+                    await this.handleModelChange();
+                    return;
+                }
+
+                if (message.command === 'followUp' && this.onFollowUp) {
+                    const question = message.question;
+                    console.log('[ContextPanel] Received follow-up question:', question);
+
+                    // Check for /model command
+                    if (question.trim().toLowerCase() === '/model') {
                         await this.handleModelChange();
                         return;
                     }
 
-                    if (message.command === 'followUp' && this.onFollowUp) {
-                        const question = message.question;
-                        console.log('[ContextPanel] Received follow-up question:', question);
+                    // Add user question to history
+                    this.conversationHistory.push({ role: 'user', content: question });
 
-                        // Check for /model command
-                        if (question.trim().toLowerCase() === '/model') {
-                            await this.handleModelChange();
-                            return;
-                        }
+                    // Add empty assistant message for streaming
+                    this.conversationHistory.push({ role: 'assistant', content: '' });
+                    const assistantMsgIndex = this.conversationHistory.length - 1;
 
-                        // Add user question to history
-                        this.conversationHistory.push({ role: 'user', content: question });
+                    // Show initial state
+                    this.updateConversation(true, 'Processing question...', 10);
 
-                        // Add empty assistant message for streaming
-                        this.conversationHistory.push({ role: 'assistant', content: '' });
-                        const assistantMsgIndex = this.conversationHistory.length - 1;
+                    try {
+                        // Progress callback to update loading message
+                        const onProgress: ProgressCallback = (progressMessage, percentage) => {
+                            this.updateConversation(true, progressMessage, percentage);
+                        };
 
-                        // Show initial state
-                        this.updateConversation(true, 'Processing question...', 10);
+                        // Streaming callback to update response in real-time
+                        const onStream: StreamCallback = (chunk: string) => {
+                            this.conversationHistory[assistantMsgIndex].content += chunk;
+                            this.streamToConversation(chunk);
+                        };
 
-                        try {
-                            // Progress callback to update loading message
-                            const onProgress: ProgressCallback = (progressMessage, percentage) => {
-                                this.updateConversation(true, progressMessage, percentage);
-                            };
+                        // Get answer from agent with progress and streaming
+                        const answer = await this.onFollowUp(question, onProgress, onStream);
 
-                            // Streaming callback to update response in real-time
-                            const onStream: StreamCallback = (chunk: string) => {
-                                this.conversationHistory[assistantMsgIndex].content += chunk;
-                                this.streamToConversation(chunk);
-                            };
+                        // Ensure final answer is in history (in case streaming didn't capture all)
+                        this.conversationHistory[assistantMsgIndex].content = answer;
 
-                            // Get answer from agent with progress and streaming
-                            const answer = await this.onFollowUp(question, onProgress, onStream);
-
-                            // Ensure final answer is in history (in case streaming didn't capture all)
-                            this.conversationHistory[assistantMsgIndex].content = answer;
-
-                            // Update UI (removes loading state)
-                            this.updateConversation(false);
-                        } catch (error) {
-                            console.error('[ContextPanel] Follow-up error:', error);
-                            const errorMsg = error instanceof Error ? error.message : String(error);
-                            this.conversationHistory[assistantMsgIndex].content = `Error: ${errorMsg}`;
-                            this.updateConversation(false);
-                        }
+                        // Update UI (removes loading state)
+                        this.updateConversation(false);
+                    } catch (error) {
+                        console.error('[ContextPanel] Follow-up error:', error);
+                        const errorMsg = error instanceof Error ? error.message : String(error);
+                        this.conversationHistory[assistantMsgIndex].content = `Error: ${errorMsg}`;
+                        this.updateConversation(false);
                     }
                 }
-            );
-        }
-
-        this.panel.webview.html = this.getHtmlContent(summary, rawContext);
+            }
+        );
     }
 
     /**
@@ -363,6 +421,7 @@ export class ContextPanel {
             <p><strong>Date:</strong> ${bc.date || 'unknown'}</p>
             <p><strong>Message:</strong> ${this.escapeHtml(bc.message || '')}</p>
             ${bc.lines ? `<p class="metadata">Lines: ${bc.lines.join(', ')}</p>` : ''}
+            ${bc.html_url ? `<p><a href="${bc.html_url}">View Commit →</a></p>` : ''}
         </div>
         `).join('<hr style="margin: 10px 0; border: none; border-top: 1px solid var(--vscode-panel-border);">')}
     </div>
@@ -377,6 +436,7 @@ export class ContextPanel {
         <p><strong>Author:</strong> ${this.escapeHtml(context.blame_commit.author || 'unknown')}</p>
         <p><strong>Date:</strong> ${context.blame_commit.date || 'unknown'}</p>
         <p><strong>Message:</strong> ${this.escapeHtml(context.blame_commit.message || '')}</p>
+        ${context.blame_commit.html_url ? `<p><a href="${context.blame_commit.html_url}">View Commit →</a></p>` : ''}
     </div>
     ` : ''}
 
@@ -538,7 +598,15 @@ export class ContextPanel {
         function updateConversation(history, isLoading, loadingMessage, percentage) {
             let html = '';
 
-            for (const msg of history) {
+            for (let i = 0; i < history.length; i++) {
+                const msg = history[i];
+                const isLastMessage = i === history.length - 1;
+
+                // Skip empty assistant messages when loading - the loading block will show instead
+                if (isLoading && isLastMessage && msg.role === 'assistant' && !msg.content) {
+                    continue;
+                }
+
                 const roleClass = msg.role === 'user' ? 'user-message' : 'assistant-message';
                 const roleLabel = msg.role === 'user' ? 'You' : 'CTM';
                 const content = convertMarkdownToHtml(msg.content);
@@ -553,7 +621,7 @@ export class ContextPanel {
                 const pct = percentage || 0;
                 html += '<div class="message assistant-message">';
                 html += '<div class="message-header">CTM</div>';
-                html += '<div class="message-content loading">';
+                html += '<div class="message-content">';
                 html += '<div class="loading-text">' + displayMessage + '</div>';
                 if (pct > 0) {
                     html += '<div class="progress-bar"><div class="progress-fill" style="width: ' + pct + '%"></div></div>';
@@ -696,5 +764,157 @@ export class ContextPanel {
             "'": '&#039;'
         };
         return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    /**
+     * Generate HTML for the loading state
+     */
+    private getLoadingHtml(filePath: string, lineRange: string): string {
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Context - Loading</title>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            color: var(--vscode-foreground);
+            background: var(--vscode-editor-background);
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            font-size: 1.8em;
+            border-bottom: 2px solid var(--vscode-panel-border);
+            padding-bottom: 0.3em;
+            margin-bottom: 1em;
+        }
+        .loading-container {
+            background: var(--vscode-textBlockQuote-background);
+            border-left: 4px solid var(--vscode-textLink-foreground);
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .file-info {
+            margin-bottom: 20px;
+        }
+        .file-info code {
+            background: var(--vscode-textCodeBlock-background);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: var(--vscode-editor-font-family);
+        }
+        .progress-section {
+            margin-top: 20px;
+        }
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .progress-message {
+            color: var(--vscode-foreground);
+        }
+        .progress-percentage {
+            color: var(--vscode-descriptionForeground);
+            font-weight: bold;
+        }
+        .progress-bar-container {
+            height: 8px;
+            background: var(--vscode-progressBar-background);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--vscode-textLink-foreground), var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)));
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+        .current-tool {
+            margin-top: 12px;
+            color: var(--vscode-descriptionForeground);
+            font-size: 0.9em;
+        }
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--vscode-descriptionForeground);
+            border-radius: 50%;
+            border-top-color: var(--vscode-textLink-foreground);
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .metadata {
+            color: var(--vscode-descriptionForeground);
+            font-size: 0.9em;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--vscode-panel-border);
+        }
+    </style>
+</head>
+<body>
+    <h1>Code Context</h1>
+
+    <div class="loading-container">
+        <div class="file-info">
+            <p><strong>Analyzing:</strong> <code>${this.escapeHtml(filePath)}</code></p>
+            <p><strong>Lines:</strong> ${this.escapeHtml(lineRange)}</p>
+        </div>
+
+        <div class="progress-section">
+            <div class="progress-header">
+                <span class="progress-message" id="progressMessage"><span class="spinner"></span>Starting investigation...</span>
+                <span class="progress-percentage" id="progressPercentage">0%</span>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" id="progressBar" style="width: 0%"></div>
+            </div>
+            <div class="current-tool" id="currentTool"></div>
+        </div>
+    </div>
+
+    <div class="metadata">
+        <p>Powered by <a href="https://github.com/burak/codebase-time-machine">Codebase Time Machine</a></p>
+    </div>
+
+    <script>
+        const progressMessage = document.getElementById('progressMessage');
+        const progressPercentage = document.getElementById('progressPercentage');
+        const progressBar = document.getElementById('progressBar');
+        const currentTool = document.getElementById('currentTool');
+
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            if (message.command === 'updateProgress') {
+                // Update progress message with spinner
+                progressMessage.innerHTML = '<span class="spinner"></span>' + message.message;
+
+                // Update percentage
+                progressPercentage.textContent = Math.round(message.percentage) + '%';
+
+                // Update progress bar
+                progressBar.style.width = message.percentage + '%';
+
+                // Update current tool if provided
+                if (message.currentTool) {
+                    currentTool.textContent = 'Using: ' + message.currentTool;
+                } else {
+                    currentTool.textContent = '';
+                }
+            }
+        });
+    </script>
+</body>
+</html>`;
     }
 }
