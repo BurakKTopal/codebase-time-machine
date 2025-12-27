@@ -11,6 +11,7 @@ export class ContextPanel {
     private onFollowUp: FollowUpHandler | undefined;
     private conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
     private messageHandlerDisposable: vscode.Disposable | undefined;
+    private disposeCallbacks: Array<() => void> = [];
 
     /**
      * Set the handler for follow-up questions
@@ -20,9 +21,16 @@ export class ContextPanel {
     }
 
     /**
+     * Register a callback to be called when the panel is disposed
+     */
+    onDispose(callback: () => void): void {
+        this.disposeCallbacks.push(callback);
+    }
+
+    /**
      * Show the panel in loading state (before investigation completes)
      */
-    showLoading(filePath: string, lineRange: string): void {
+    showLoading(filePath: string, lineRange: string, title?: string): void {
         this.conversationHistory = [];
 
         if (this.panel) {
@@ -30,7 +38,7 @@ export class ContextPanel {
         } else {
             this.panel = vscode.window.createWebviewPanel(
                 'ctmContext',
-                'Code Context',
+                title ? `CTM: ${title}` : 'Code Context',
                 vscode.ViewColumn.Beside,
                 {
                     enableScripts: true,
@@ -41,6 +49,9 @@ export class ContextPanel {
             this.panel.onDidDispose(() => {
                 this.panel = undefined;
                 this.onFollowUp = undefined;
+                // Call all registered dispose callbacks
+                this.disposeCallbacks.forEach(cb => cb());
+                this.disposeCallbacks = [];
             });
         }
 
@@ -61,16 +72,20 @@ export class ContextPanel {
         });
     }
 
-    show(summary: string, rawContext: any, _extensionUri: vscode.Uri): void {
+    show(summary: string, rawContext: any, _extensionUri: vscode.Uri, title?: string): void {
         // Reset conversation history for new investigation
         this.conversationHistory = [];
 
         if (this.panel) {
             this.panel.reveal(vscode.ViewColumn.Beside);
+            // Update title if provided
+            if (title) {
+                this.panel.title = `CTM: ${title}`;
+            }
         } else {
             this.panel = vscode.window.createWebviewPanel(
                 'ctmContext',
-                'Code Context',
+                title ? `CTM: ${title}` : 'Code Context',
                 vscode.ViewColumn.Beside,
                 {
                     enableScripts: true,
@@ -82,6 +97,9 @@ export class ContextPanel {
                 this.panel = undefined;
                 this.onFollowUp = undefined;
                 this.messageHandlerDisposable = undefined;
+                // Call all registered dispose callbacks
+                this.disposeCallbacks.forEach(cb => cb());
+                this.disposeCallbacks = [];
             });
         }
 
@@ -670,7 +688,12 @@ export class ContextPanel {
     }
 
     private convertMarkdownToHtml(markdown: string): string {
-        let html = markdown;
+        // First, escape HTML entities to prevent XSS and broken HTML
+        // This ensures literal < and > in the summary don't break the page
+        let html = markdown
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
 
         // Headers
         html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
@@ -698,7 +721,7 @@ export class ContextPanel {
         html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
 
         // Blockquotes
-        html = html.replace(/^> (.*$)/gim, '<blockquote>$1</blockquote>');
+        html = html.replace(/^&gt; (.*$)/gim, '<blockquote>$1</blockquote>');
 
         // Paragraphs
         html = html.replace(/\n\n/g, '</p><p>');
