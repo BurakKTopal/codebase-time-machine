@@ -27,6 +27,12 @@ export const CLAUDE_MODELS: LLMModel[] = [
         contextWindow: 200000
     },
     {
+        id: 'claude-haiku-4-5-20251001',
+        label: 'Haiku 4.5',
+        description: 'Fast, cheap ($1/$5)',
+        contextWindow: 200000
+    },
+    {
         id: 'claude-sonnet-4-5-20250929',
         label: 'Sonnet 4.5',
         description: 'Balanced ($3/$15)',

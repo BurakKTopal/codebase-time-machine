@@ -41,9 +41,9 @@ explain_file                - Overview of a file's purpose and history
 
 ### 🐌 SLOW (5-15 seconds) - Use Sparingly
 ```
-get_code_context           - Full context chain (file → commits → PRs → issues)
 trace_github_symbol_history - Track function/class across commits
 get_change_coupling        - Find files that change together
+get_activity_summary       - Repo activity analysis (with optional path filter)
 ```
 **When**: Deep investigations, pattern analysis, complex questions
 
@@ -51,7 +51,6 @@ get_change_coupling        - Find files that change together
 ```
 search_github_code         - Search entire codebase
 search_github_commits      - Search all commits
-get_activity_summary       - Repo-wide activity analysis
 ```
 **When**: No other option, user explicitly asks for comprehensive search
 
@@ -228,22 +227,25 @@ trace_github_symbol_history(
 
 **Strategy**:
 ```python
-# Full context aggregation
-get_code_context(
+# Use get_line_context with higher history_depth for full context
+get_line_context(
     owner="kubernetes",
     repo="kubernetes",
-    path="pkg/util/oom/oom_linux.go",
-    max_commits=10
+    file_path="pkg/util/oom/oom_linux.go",
+    line_start=70,
+    line_end=80,
+    include_discussions=true,
+    history_depth=10  # Look back through more commits for full context
 )
 
 # Returns:
-# - File commits → PRs → Issues
-# - Full decision chain
-# - Top contributors
+# - Line content + blame → commit → PR → issues
+# - Historical commits that modified this code
+# - Full decision chain with discussions
 ```
 
-**Time**: 8-15 seconds
-**Why**: Multi-hop traversal (commit → PR → issue)
+**Time**: 4-8 seconds
+**Why**: Single aggregated call with history depth
 **When**: User explicitly wants comprehensive analysis
 
 ---
@@ -252,13 +254,13 @@ get_code_context(
 
 ### Tactic 1: Start Small, Expand If Needed
 ```python
-# ❌ DON'T start with max depth
-get_code_context(path="...", max_commits=100)  # 30+ seconds!
+# ❌ DON'T start with high history_depth
+get_line_context(file_path="...", line_start=70, history_depth=50)  # Slower
 
 # ✅ DO start small
-get_line_context(file="...", line=70)  # 3 seconds
-# If user wants more:
-get_code_context(path="...", max_commits=10)  # 8 seconds
+get_line_context(file_path="...", line_start=70)  # 3 seconds (history_depth=1)
+# If user wants more context:
+get_line_context(file_path="...", line_start=70, history_depth=10)  # 5 seconds
 ```
 
 ### Tactic 2: Use Batch Operations
@@ -321,9 +323,10 @@ It's a 100ms sleep to prevent a race condition. Let me get more details..."
 | "File history?" | `get_github_file_history` | 🚀 2s | List commits only |
 | "File history + details?" | `file_history` → `commits_batch` | 🚀 4s | Need commit details |
 | "Function evolution?" | `trace_github_symbol_history` | 🐌 8s | Track specific symbol |
-| "Full file story?" | `get_code_context` | 🐌 10s | Deep investigation |
+| "Full code story?" | `get_line_context` with `history_depth=10` | 🚀 5s | Deep investigation |
 | "Who wrote this?" | `get_code_owners` | 🚀 3s | Contributor analysis |
 | "What else changes with this?" | `get_change_coupling` | 🐌 8s | Dependency analysis |
+| "Repo/path activity?" | `get_activity_summary` | 🐌 5s | Activity overview with path filter |
 | "Search for pattern" | `search_github_code` | 🐢 15s | Last resort |
 
 ---
@@ -345,9 +348,9 @@ get_commits_batch([sha1, sha2, sha3, ...])
 ```
 
 ### Mistake 2: Going Deep Too Fast
-❌ **BAD**: Start with `get_code_context(max_commits=50)`
+❌ **BAD**: Start with `get_line_context(history_depth=50)`
 
-✅ **GOOD**: Start with `get_line_context()`, expand if needed
+✅ **GOOD**: Start with `get_line_context()`, increase `history_depth` if needed
 
 ### Mistake 3: Ignoring Cache
 ❌ **BAD**: Clear cache between related queries
@@ -468,17 +471,16 @@ Before making a tool call, ask:
 #### Code Navigation
 - `get_github_file` - Get file contents (< 1s)
 - `get_github_file_symbols` - Extract functions/classes (< 1s)
-- `list_github_tree` - Browse directory (< 1s)
+- `list_github_tree` - Browse directory, optional activity info (< 1s, +2s with activity)
 
 #### History & Context
 - `get_github_file_history` - Commits for a file (2-3s)
 - `trace_github_symbol_history` - Track function/class evolution (8-10s)
-- `get_code_context` - Full context chain (10-15s)
 
 #### Metadata & Analysis
 - `get_code_owners` - Who knows this code best (3-5s)
 - `get_change_coupling` - What changes together (8-10s)
-- `get_activity_summary` - Repo activity overview (5-8s)
+- `get_activity_summary` - Repo/path activity overview (5-8s)
 
 #### Search (Last Resort)
 - `search_github_code` - Search codebase (15-30s)
@@ -700,8 +702,7 @@ The CTM has 32 tools organized into 4 levels based on usage frequency and comple
 | `trace_github_symbol_history` | 🐌 8-10s | How did this function/class evolve over time? |
 | `get_code_owners` | 🚀 3-5s | Who knows this code best? Who to ask? |
 | `get_change_coupling` | 🐌 8-10s | What files change together? Hidden dependencies? |
-| `get_activity_summary` | 🐌 5-8s | Repository activity overview, team patterns |
-| `get_recent_activity` | 🚀 3-5s | What changed recently in file/directory? |
+| `get_activity_summary` | 🐌 5-8s | Repository/path activity overview with optional path filter |
 | `get_github_file_symbols` | ⚡ <1s | Extract functions/classes from a file |
 
 ### Level 3: Advanced Tools (Specialized Use Cases)
@@ -710,8 +711,7 @@ The CTM has 32 tools organized into 4 levels based on usage frequency and comple
 
 | Tool | Speed | Primary Use Case | Note |
 |------|-------|------------------|------|
-| `get_code_context` | 🐌 10-15s | File-wide decision chain (commits → PRs → issues) | Consider `get_line_context` first |
-| `explain_directory` | 🚀 3-5s | Understand directory purpose and structure | |
+| `list_github_tree` | ⚡ 1s (+2s with activity) | Browse directory structure | Use `include_activity=true` for activity info |
 | `get_github_commits_batch` | 🚀 3-5s | Fetch 5-10 commits at once (optimization) | |
 | `search_prs_for_commit` | 🚀 2-3s | Find PRs containing specific commit | |
 | `get_pr` | 🚀 2-3s | Get PR details with comments/reviews | |
@@ -871,19 +871,18 @@ get_github_file_history(
 │  └─ Local repo? → get_local_line_context ⚡ (auto-detects GitHub remote)
 │
 ┌─ "Why does this FILE exist?"
-│  ├─ Need full decision chain? → get_code_context 🐌
+│  ├─ Need deep history? → get_line_context with history_depth=10 🚀
 │  └─ Just overview/summary? → explain_file 🚀
 │
 ┌─ "What's in this file/repo?"
 │  ├─ File content? → get_github_file ⚡
-│  ├─ Just list files? → list_github_tree ⚡
-│  ├─ Understand directory? → explain_directory 🚀
+│  ├─ List files? → list_github_tree ⚡
+│  ├─ List files + activity? → list_github_tree with include_activity=true 🚀
 │  └─ Extract functions/classes? → get_github_file_symbols ⚡
 │
 ┌─ "How did X change over time?"
 │  ├─ Specific function/class? → trace_github_symbol_history 🐌
-│  ├─ Entire file? → get_github_file_history 🚀
-│  └─ Recent changes only? → get_recent_activity 🚀
+│  └─ Entire file? → get_github_file_history 🚀
 │
 ┌─ "Who should I ask about this code?"
 │  └─ get_code_owners 🚀
@@ -905,9 +904,8 @@ get_github_file_history(
 │  ├─ For specific file? → get_github_file_history 🚀
 │  └─ Repo-wide search? → search_github_commits 🐢 (SLOW, last resort)
 │
-┌─ "What's happening in this repo?"
-│  ├─ Overall activity? → get_activity_summary 🐌
-│  └─ Recent changes? → get_recent_activity 🚀
+┌─ "What's happening in this repo/path?"
+│  └─ get_activity_summary (with optional path filter) 🐌
 ```
 
 **Default Path**: Start with `get_line_context` for most code investigation questions.
@@ -918,25 +916,25 @@ get_github_file_history(
 
 When multiple tools seem similar, here's how to choose:
 
-### `get_line_context` vs `get_code_context`
+### `get_line_context`: history_depth=1 vs history_depth=10
 
-| Aspect | `get_line_context` | `get_code_context` |
-|--------|-------------------|-------------------|
-| **Scope** | Line-specific (targeted) | File-wide (comprehensive) |
-| **Speed** | ⚡ 2-4s | 🐌 10-15s |
-| **Use when** | Investigating specific code | Need full file story |
-| **Avoid when** | Need file-wide history | Line-specific question |
-| **Recommendation** | **Start here** - works for 90% of cases | Use if line context insufficient |
+| Aspect | `history_depth=1` (default) | `history_depth=10` |
+|--------|----------------------------|-------------------|
+| **Scope** | Most recent commit only | 10 commits deep |
+| **Speed** | ⚡ 2-4s | 🚀 4-6s |
+| **Use when** | Recent code changes | Finding original introduction |
+| **Avoid when** | Code modified by reformatting | Just need quick answer |
+| **Recommendation** | **Start here** - works for 90% of cases | Use for code archaeology |
 
-### `list_github_tree` vs `explain_directory`
+### `list_github_tree`: Basic vs with Activity
 
-| Aspect | `list_github_tree` | `explain_directory` |
-|--------|-------------------|---------------------|
-| **Output** | Raw file list | Analyzed overview |
-| **Speed** | ⚡ 1s | 🚀 3-5s |
-| **Use when** | Just need file listing | Understanding purpose |
-| **Avoid when** | Need analysis/context | Just need file list |
-| **Recommendation** | Quick exploration | Understanding what directory does |
+| Aspect | `include_activity=false` | `include_activity=true` |
+|--------|-------------------------|------------------------|
+| **Output** | File/dir list only | List + contributors + key files |
+| **Speed** | ⚡ 1s | 🚀 3s |
+| **Use when** | Just need structure | Need to understand directory |
+| **Avoid when** | Need detailed activity | Just navigating |
+| **Recommendation** | Quick exploration | Understanding codebase layout |
 
 ### `get_github_file_history` vs `trace_github_symbol_history`
 

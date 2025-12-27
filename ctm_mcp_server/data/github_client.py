@@ -7,6 +7,7 @@ Provides access to GitHub PRs, issues, and comments using the GitHub REST API.
 import os
 import re
 from datetime import datetime
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
@@ -89,7 +90,7 @@ class GitHubClient:
         if self.token:
             self._headers["Authorization"] = f"Bearer {self.token}"
 
-    def _cache_get(self, namespace: str, *args) -> dict | None:
+    def _cache_get(self, namespace: str, *args: Any) -> Any | None:
         """Get value from cache if cache is enabled.
 
         Args:
@@ -97,19 +98,19 @@ class GitHubClient:
             *args: Additional cache key components (e.g., pr_number).
 
         Returns:
-            Cached value as dict, or None if not cached or cache disabled.
+            Cached value, or None if not cached or cache disabled.
         """
         if not self.cache:
             return None
         return self.cache.get(namespace, self.owner, self.repo, *args)
 
-    def _cache_set(self, namespace: str, *args, value: dict, ttl: int | None = None) -> None:
+    def _cache_set(self, namespace: str, *args: Any, value: Any, ttl: int | None = None) -> None:
         """Set value in cache if cache is enabled.
 
         Args:
             namespace: Cache namespace (e.g., "github:get_pull_request").
             *args: Additional cache key components (e.g., pr_number).
-            value: Value to cache (must be dict for JSON serialization).
+            value: Value to cache (must be JSON-serializable).
             ttl: Time-to-live in seconds, or None for no expiration.
         """
         if self.cache:
@@ -128,9 +129,9 @@ class GitHubClient:
         self,
         method: str,
         path: str,
-        extra_headers: dict | None = None,
-        **kwargs,
-    ) -> dict | list:
+        extra_headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """Make an API request.
 
         Args:
@@ -140,7 +141,7 @@ class GitHubClient:
             **kwargs: Additional arguments for httpx.
 
         Returns:
-            JSON response.
+            JSON response (dict or list depending on endpoint).
 
         Raises:
             GitHubClientError: On API errors.
@@ -165,6 +166,38 @@ class GitHubClient:
                 raise GitHubClientError(f"API error {response.status_code}: {response.text}")
 
             return response.json()
+
+    async def _graphql_request(self, query: str, variables: dict[str, Any] | None = None) -> Any:
+        """Make a GraphQL API request.
+
+        Args:
+            query: GraphQL query string.
+            variables: Query variables.
+
+        Returns:
+            JSON response data.
+
+        Raises:
+            GitHubClientError: On API errors.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.github.com/graphql",
+                headers=self._headers,
+                json={"query": query, "variables": variables or {}},
+                timeout=30.0,
+            )
+
+            if response.status_code == 401:
+                raise GitHubClientError("GraphQL requires authentication")
+            if response.status_code >= 400:
+                raise GitHubClientError(f"GraphQL error {response.status_code}: {response.text}")
+
+            data = response.json()
+            if "errors" in data:
+                raise GitHubClientError(f"GraphQL errors: {data['errors']}")
+
+            return data.get("data", {})
 
     def _repo_path(self, path: str) -> str:
         """Build repo-specific API path."""
@@ -438,7 +471,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:search_prs_for_commit", sha)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]  # type: ignore[no-any-return]
 
         try:
             # Use the proper GitHub API endpoint that returns PRs containing the commit
@@ -481,6 +514,64 @@ class GitHubClient:
         matches = re.findall(pattern, body, re.IGNORECASE)
         return [int(m) for m in matches]
 
+    # GraphQL query for linked issues (REST Timeline API doesn't include issue numbers)
+    _GRAPHQL_LINKED_ISSUES = """
+        query($owner: String!, $repo: String!, $prNumber: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $prNumber) {
+              closingIssuesReferences(first: 10) {
+                nodes { number }
+              }
+            }
+          }
+        }
+    """
+
+    async def get_pr_linked_issues(self, pr_number: int) -> list[int]:
+        """Get issues linked to a PR via GitHub's Development sidebar.
+
+        Uses the GraphQL API to find closingIssuesReferences which are issues
+        linked to the PR (not just mentioned in text).
+
+        Args:
+            pr_number: PR number.
+
+        Returns:
+            List of linked issue numbers.
+        """
+        # Check cache first
+        cached = self._cache_get("github:get_pr_linked_issues", pr_number)
+        if cached is not None:
+            return cached  # type: ignore[no-any-return]  # type: ignore[no-any-return]
+
+        linked_issues: list[int] = []
+
+        try:
+            data = await self._graphql_request(
+                self._GRAPHQL_LINKED_ISSUES,
+                {"owner": self.owner, "repo": self.repo, "prNumber": pr_number},
+            )
+
+            pr_data = data.get("repository", {}).get("pullRequest", {})
+            nodes = pr_data.get("closingIssuesReferences", {}).get("nodes", [])
+
+            for node in nodes:
+                issue_num = node.get("number")
+                if issue_num and issue_num != pr_number:
+                    linked_issues.append(issue_num)
+
+        except Exception:
+            # GraphQL API may fail, fall back gracefully
+            pass
+
+        # Deduplicate and cache
+        linked_issues = list(set(linked_issues))
+        self._cache_set(
+            "github:get_pr_linked_issues", pr_number, value=linked_issues, ttl=self.TTL_SHORT
+        )
+
+        return linked_issues
+
     async def get_repo_info(self) -> dict:
         """Get repository information.
 
@@ -490,7 +581,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:get_repo_info")
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         data = await self._request("GET", self._repo_path(""))
         result = {
@@ -527,7 +618,7 @@ class GitHubClient:
         # Check cache first (commits are immutable)
         cached = self._cache_get("github:get_commit", sha)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         data = await self._request("GET", self._repo_path(f"/commits/{sha}"))
 
@@ -538,15 +629,17 @@ class GitHubClient:
         # Extract files changed
         files = []
         for f in data.get("files", []):
-            files.append(
-                {
-                    "path": f.get("filename", ""),
-                    "status": f.get("status", "modified"),
-                    "additions": f.get("additions", 0),
-                    "deletions": f.get("deletions", 0),
-                    "patch": f.get("patch"),
-                }
-            )
+            file_info = {
+                "path": f.get("filename", ""),
+                "status": f.get("status", "modified"),
+                "additions": f.get("additions", 0),
+                "deletions": f.get("deletions", 0),
+                "patch": f.get("patch"),
+            }
+            # Capture previous filename for renames (used for following file history)
+            if f.get("status") == "renamed" and f.get("previous_filename"):
+                file_info["previous_path"] = f.get("previous_filename")
+            files.append(file_info)
 
         result = {
             "sha": data.get("sha", sha),
@@ -660,7 +753,7 @@ class GitHubClient:
         cache_key_params = (path or "", sha or "", per_page, page)
         cached = self._cache_get("github:list_commits", *cache_key_params)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         params: dict[str, str | int] = {"per_page": per_page, "page": page}
         if path:
@@ -714,7 +807,7 @@ class GitHubClient:
         # Check cache first (include path and ref in cache key)
         cached = self._cache_get("github:get_file_contents", path, ref or "")
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         params = {}
         if ref:
@@ -778,7 +871,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:get_branches", per_page)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         data = await self._request(
             "GET",
@@ -817,7 +910,7 @@ class GitHubClient:
         # Check cache first (tree_sha might be resolved, so cache by original input)
         cached = self._cache_get("github:get_tree", tree_sha, recursive)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         original_tree_sha = tree_sha
 
@@ -903,7 +996,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:search_code", query, per_page, page)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         # Scope to this repository
         full_query = f"repo:{self.owner}/{self.repo} {query}"
@@ -964,7 +1057,7 @@ class GitHubClient:
         # Check cache first
         cached = self._cache_get("github:search_commits", query, per_page, page)
         if cached is not None:
-            return cached
+            return cached  # type: ignore[no-any-return]
 
         # Scope to this repository
         full_query = f"repo:{self.owner}/{self.repo} {query}"
@@ -1043,6 +1136,7 @@ class GitHubClient:
         path: str | None = None,
         max_commits: int = 20,
         regex: bool = False,
+        follow_renames: bool = True,
     ) -> dict:
         """Find commits that introduced or removed a specific string.
 
@@ -1055,29 +1149,16 @@ class GitHubClient:
             path: Optional file path to limit the search.
             max_commits: Maximum number of commits to analyze.
             regex: If True, treat search_string as a regex pattern.
+            follow_renames: If True, follow file renames to find the true origin.
 
         Returns:
             Dictionary with:
                 - commits: List of commits where the string was added/removed
                 - introduction_commit: The oldest commit (likely when code was added)
                 - search_string: The string that was searched
+                - rename_chain: List of file paths if renames were followed
         """
         import asyncio
-
-        # Get file history
-        if path:
-            commits_data = await self.list_commits(path=path, per_page=max_commits)
-        else:
-            commits_data = await self.list_commits(per_page=max_commits)
-
-        if not commits_data:
-            return {
-                "commits": [],
-                "introduction_commit": None,
-                "search_string": search_string,
-            }
-
-        matching_commits = []
 
         # Compile regex if needed
         if regex:
@@ -1085,17 +1166,41 @@ class GitHubClient:
         else:
             pattern = None
 
-        async def check_commit(commit_summary: dict) -> dict | None:
-            """Check if a commit's diff contains the search string."""
+        all_matching_commits = []
+        total_analyzed = 0
+        rename_chain = [path] if path else []
+        current_path = path
+        seen_shas = set()  # Avoid processing the same commit twice
+
+        # Semaphore for limiting concurrent API requests
+        semaphore = asyncio.Semaphore(5)
+
+        async def check_commit(
+            commit_summary: dict, check_path: str | None
+        ) -> tuple[dict | None, str | None]:
+            """Check if a commit's diff contains the search string.
+            Returns (commit_detail, previous_path) where previous_path is set if a rename was detected.
+            """
             sha = commit_summary["sha"]
             try:
-                commit_detail = await self.get_commit(sha)
+                async with semaphore:
+                    commit_detail = await self.get_commit(sha)
                 files = commit_detail.get("files", [])
+                detected_previous_path = None
 
                 for file_info in files:
-                    # If path filter specified, only check that file
-                    if path and file_info.get("path") != path:
-                        continue
+                    file_path = file_info.get("path", "")
+
+                    # Track renames - check both current path and previous path
+                    if check_path:
+                        # Check if this file matches our search path
+                        is_target_file = file_path == check_path
+                        # Also check if this is a rename TO our path (meaning the previous_path is what we want)
+                        if file_info.get("status") == "renamed" and file_path == check_path:
+                            detected_previous_path = file_info.get("previous_path")
+
+                        if not is_target_file:
+                            continue
 
                     patch = file_info.get("patch", "")
                     if not patch:
@@ -1104,47 +1209,83 @@ class GitHubClient:
                     # Check if the search string appears in added/removed lines
                     if regex and pattern:
                         if pattern.search(patch):
-                            return commit_detail
+                            return (commit_detail, detected_previous_path)
                     else:
                         if search_string in patch:
-                            return commit_detail
+                            return (commit_detail, detected_previous_path)
 
-                return None
+                # Even if no match, return previous_path if rename detected (for tracing history)
+                if detected_previous_path:
+                    return (None, detected_previous_path)
+                return (None, None)
             except Exception:
-                return None
+                return (None, None)
 
-        # Check commits in parallel (but limit concurrency)
-        semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
+        # Follow renames iteratively
+        while True:
+            # Get file history for current path
+            if current_path:
+                commits_data = await self.list_commits(path=current_path, per_page=max_commits)
+            else:
+                commits_data = await self.list_commits(per_page=max_commits)
+                # If no path specified, we can't follow renames
+                follow_renames = False
 
-        async def check_with_semaphore(commit: dict) -> dict | None:
-            async with semaphore:
-                return await check_commit(commit)
+            if not commits_data:
+                break
 
-        results = await asyncio.gather(*[check_with_semaphore(c) for c in commits_data])
+            # Filter out already-seen commits
+            new_commits = [c for c in commits_data if c["sha"] not in seen_shas]
+            for c in new_commits:
+                seen_shas.add(c["sha"])
 
-        # Filter out None results and collect matching commits
-        for result in results:
-            if result:
-                matching_commits.append(
-                    {
-                        "sha": result["sha"],
-                        "short_sha": result["sha"][:7],
-                        "message": result["message"],
-                        "subject": result["message"].split("\n")[0],
-                        "author": result["author"]["name"],
-                        "date": result["author"]["date"],
-                    }
-                )
+            total_analyzed += len(new_commits)
+
+            # Check commits in parallel
+            results = await asyncio.gather(*[check_commit(c, current_path) for c in new_commits])
+
+            # Collect matching commits and detect renames
+            previous_path = None
+            for result, prev_path in results:
+                if result:
+                    all_matching_commits.append(
+                        {
+                            "sha": result["sha"],
+                            "short_sha": result["sha"][:7],
+                            "message": result["message"],
+                            "subject": result["message"].split("\n")[0],
+                            "author": result["author"]["name"],
+                            "date": result["author"]["date"],
+                        }
+                    )
+                # Track the first rename we find (oldest one in this batch)
+                if prev_path and not previous_path:
+                    previous_path = prev_path
+
+            # If we found a rename and follow_renames is enabled, continue with old path
+            if follow_renames and previous_path and previous_path not in rename_chain:
+                rename_chain.append(previous_path)
+                current_path = previous_path
+                # Continue the loop to search with the old path
+            else:
+                # No more renames to follow
+                break
 
         # The introduction commit is the oldest one (last in the list)
-        introduction_commit = matching_commits[-1] if matching_commits else None
+        introduction_commit = all_matching_commits[-1] if all_matching_commits else None
 
-        return {
-            "commits": matching_commits,
+        result = {
+            "commits": all_matching_commits,
             "introduction_commit": introduction_commit,
             "search_string": search_string,
-            "total_analyzed": len(commits_data),
+            "total_analyzed": total_analyzed,
         }
+
+        # Include rename chain if renames were followed
+        if len(rename_chain) > 1:
+            result["rename_chain"] = rename_chain
+
+        return result
 
     @classmethod
     def from_remote_url(cls, remote_url: str, token: str | None = None) -> "GitHubClient":

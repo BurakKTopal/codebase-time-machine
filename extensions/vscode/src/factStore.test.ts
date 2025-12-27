@@ -104,7 +104,8 @@ describe('FactStore', () => {
             const facts = factStore.getFactsSummary();
             assert.ok(facts.includes('abc123'));
             assert.ok(facts.includes('def456'));
-            assert.ok(facts.includes('ORIGIN'));
+            // Note: historical_commits no longer labeled as ORIGIN (use pickaxe_search for true origin)
+            assert.ok(facts.includes('Oldest commit in view'));
         });
     });
 
@@ -175,7 +176,7 @@ describe('FactStore', () => {
             const result = {
                 search_string: 'specialFunction',
                 commits: [
-                    { sha: 'originsha1', author: 'original_author', date: '2023-01-01', message: 'Add specialFunction' }
+                    { sha: 'originsha1234567890', author: 'original_author', date: '2023-01-01', message: 'Add specialFunction' }
                 ]
             };
 
@@ -183,7 +184,7 @@ describe('FactStore', () => {
 
             const facts = factStore.getFactsSummary();
             assert.ok(facts.includes('Pickaxe'));
-            assert.ok(facts.includes('originsha1'));
+            assert.ok(facts.includes('originsh')); // SHA is truncated to 8 chars
             assert.ok(facts.includes('original_author'));
         });
 
@@ -282,9 +283,14 @@ describe('FactStore', () => {
             assert.strictEqual(factStore.hasEnoughContext(), true);
         });
 
-        it('should return true with origin and issue', async () => {
+        it('should return true with origin (from pickaxe) and issue', async () => {
+            // True origin comes from pickaxe_search, not historical_commits
+            await factStore.extractAndStore('pickaxe_search', {
+                commits: [{ sha: 'origin123', author: 'Dev', date: '2023-01-01', message: 'Initial' }],
+                introduction_commit: { sha: 'origin123', author: 'Dev', date: '2023-01-01', message: 'Initial' },
+                search_string: 'some code'
+            });
             await factStore.extractAndStore('get_local_line_context', {
-                historical_commits: [{ sha: 'origin123', author: 'Dev', date: '2023-01-01', message: 'Initial' }],
                 linked_issues: [{ number: 1, title: 'Issue', body: '' }]
             });
             assert.strictEqual(factStore.hasEnoughContext(), true);

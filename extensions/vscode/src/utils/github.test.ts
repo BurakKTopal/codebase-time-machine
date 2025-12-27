@@ -3,9 +3,12 @@ import { getRelativePath } from './github';
 
 describe('GitHub Utilities', () => {
     describe('getRelativePath', () => {
-        it('should convert absolute Windows path to relative path with forward slashes', () => {
-            const absolutePath = 'c:\\Users\\Burak\\CodebaseTimeMachine\\src\\file.ts';
-            const rootPath = 'c:\\Users\\Burak\\CodebaseTimeMachine';
+        // Use Unix-style paths for cross-platform compatibility in tests
+        // (Windows can handle forward slashes, Linux cannot handle backslashes)
+
+        it('should convert absolute path to relative path', () => {
+            const absolutePath = '/home/user/CodebaseTimeMachine/src/file.ts';
+            const rootPath = '/home/user/CodebaseTimeMachine';
             const result = getRelativePath(absolutePath, rootPath);
 
             assert.strictEqual(result, 'src/file.ts');
@@ -20,23 +23,23 @@ describe('GitHub Utilities', () => {
         });
 
         it('should handle nested directories correctly', () => {
-            const absolutePath = 'c:\\Users\\Burak\\CodebaseTimeMachine\\extensions\\vscode\\src\\utils\\github.ts';
-            const rootPath = 'c:\\Users\\Burak\\CodebaseTimeMachine';
+            const absolutePath = '/home/user/CodebaseTimeMachine/extensions/vscode/src/utils/github.ts';
+            const rootPath = '/home/user/CodebaseTimeMachine';
             const result = getRelativePath(absolutePath, rootPath);
 
             assert.strictEqual(result, 'extensions/vscode/src/utils/github.ts');
         });
 
         it('should return empty string if paths are the same', () => {
-            const path = 'c:\\Users\\Burak\\CodebaseTimeMachine';
-            const result = getRelativePath(path, path);
+            const testPath = '/home/user/CodebaseTimeMachine';
+            const result = getRelativePath(testPath, testPath);
 
             assert.strictEqual(result, '');
         });
 
         it('should handle single file in root directory', () => {
-            const absolutePath = 'c:\\Users\\Burak\\CodebaseTimeMachine\\README.md';
-            const rootPath = 'c:\\Users\\Burak\\CodebaseTimeMachine';
+            const absolutePath = '/home/user/CodebaseTimeMachine/README.md';
+            const rootPath = '/home/user/CodebaseTimeMachine';
             const result = getRelativePath(absolutePath, rootPath);
 
             assert.strictEqual(result, 'README.md');

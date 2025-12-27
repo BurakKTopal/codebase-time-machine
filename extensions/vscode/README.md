@@ -115,8 +115,9 @@ Open VS Code Settings (Ctrl+, or Cmd+,) and search for "CTM".
 
 **Anthropic:**
 - `claude-3-5-haiku-20241022` - Fast, cheapest
-- `claude-sonnet-4-5-20250514` - Balanced
-- `claude-opus-4-5-20250514` - Most capable
+- `claude-haiku-4-5-20251001` - Fast, cheap (Haiku 4.5)
+- `claude-sonnet-4-5-20250929` - Balanced
+- `claude-opus-4-5-20251101` - Most capable
 
 **OpenAI:**
 - `gpt-4.1-nano` - Fastest, cheapest

@@ -1,15 +1,14 @@
 import * as vscode from 'vscode';
 import { MCPClient } from './mcpClient';
-import { CTMAgent, ProgressUpdate, InvestigationState, InvestigationResult } from './agent';
-import { ContextPanel, ProgressCallback } from './ui/contextPanel';
+import { CTMAgent, ProgressUpdate, InvestigationResult } from './agent';
+import { ContextPanel, ProgressCallback, StreamCallback } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_MAX_TOOL_CALLS } from './constants';
 
 let mcpClient: MCPClient | null = null;
-let currentAgent: CTMAgent | null = null;
-let currentPanel: ContextPanel | null = null;
-let currentSummary: string = '';
-let currentInvestigationState: InvestigationState | null = null;
+
+// Track panels and their associated agents for multi-tab support
+const panelData = new Map<ContextPanel, { agent: CTMAgent; summary: string }>();
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Codebase Time Machine extension activated');
@@ -95,6 +94,12 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
             progress.report({ increment: 20, message: "Getting file path..." });
             const filePath = getRelativePath(editor.document.fileName, repoInfo.rootPath);
             console.log('[CTM] Step 2: File path (relative to git root):', filePath);
+
+            // Create a new panel for this analysis (supports multiple tabs)
+            const lineRange = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+            const fileName = filePath.split('/').pop() || filePath;
+            const panel = new ContextPanel();
+            panel.showLoading(filePath, lineRange, `${fileName}:${lineRange}`);
 
             // Step 2.5: Check for uncommitted changes
             progress.report({ increment: 25, message: "Checking for uncommitted changes..." });
@@ -202,6 +207,9 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                     increment: increment * 0.4, // Scale to fit within our progress range (50-90%)
                     message: update.message
                 });
+
+                // Also update the panel's loading progress
+                panel.updateProgress(update.message, update.percentage, update.currentTool);
             });
 
             let summary;
@@ -215,24 +223,9 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 console.log('[CTM] Summary length:', summary.length, 'characters');
                 console.log('[CTM] Completion reason:', result.completionReason);
                 console.log('[CTM] Context quality:', result.contextQuality);
-                console.log('[CTM] Can continue:', result.canContinue);
                 console.groupCollapsed('[CTM] 📦 Collected Context (click to expand)');
                 console.log(JSON.stringify(rawContext, null, 2));
                 console.groupEnd();
-
-                // Generate summary for continuation if needed
-                if (result.canContinue) {
-                    console.log('[CTM] Generating investigation state for potential continuation...');
-                    const investigationSummary = await agent.getInvestigationState(result.toolsUsed);
-                    currentInvestigationState = {
-                        ...investigationSummary,
-                        rawContext: result.rawContext,
-                        toolCallsUsed: result.toolCallsUsed,
-                        tokensUsed: result.tokensUsed
-                    };
-                    console.log('[CTM] Investigation state stored for continuation');
-                    console.log('[CTM] Tools used:', result.toolsUsed.join(', '));
-                }
             } catch (error) {
                 console.error('[CTM] ERROR: Agent investigation failed:', error);
                 throw new Error(`Agent investigation failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -251,66 +244,33 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 rawContext.line_end = endLine;
             }
 
-            // Store agent and summary for follow-up questions
-            currentAgent = agent;
-            currentSummary = summary;
+            // Store agent and summary for this panel's follow-up questions
+            panelData.set(panel, { agent, summary });
 
-            // Create or reuse panel
-            if (!currentPanel) {
-                currentPanel = new ContextPanel();
-            }
+            // Clean up when panel is disposed
+            panel.onDispose(() => {
+                panelData.delete(panel);
+                console.log('[CTM] Panel disposed, removed from tracking');
+            });
 
-            // Set up follow-up handler
-            currentPanel.setFollowUpHandler(async (question: string, onProgress: ProgressCallback) => {
-                if (!currentAgent) {
+            // Set up follow-up handler with streaming support
+            panel.setFollowUpHandler(async (question: string, onProgress: ProgressCallback, onStream: StreamCallback) => {
+                const data = panelData.get(panel);
+                if (!data) {
                     throw new Error('No active investigation to follow up on');
                 }
                 console.log('[CTM] Processing follow-up question:', question);
 
                 // Set up agent progress callback to forward to panel
-                currentAgent.setProgressCallback((update: ProgressUpdate) => {
+                data.agent.setProgressCallback((update: ProgressUpdate) => {
                     onProgress(update.message, update.percentage);
                 });
 
-                return await currentAgent.askFollowUp(question, currentSummary);
+                // Pass streaming callback to agent
+                return await data.agent.askFollowUp(question, data.summary, onStream);
             });
 
-            // Set up continue handler
-            currentPanel.setContinueHandler(async (onProgress: ProgressCallback) => {
-                if (!currentAgent || !currentInvestigationState) {
-                    throw new Error('No active investigation to continue');
-                }
-                console.log('[CTM] Continuing investigation...');
-
-                // Set up agent progress callback to forward to panel
-                currentAgent.setProgressCallback((update: ProgressUpdate) => {
-                    onProgress(update.message, update.percentage);
-                });
-
-                const continueResult = await currentAgent.continueInvestigation(currentInvestigationState);
-
-                // Update state for potential further continuation
-                if (continueResult.canContinue) {
-                    const newState = await currentAgent.getInvestigationState(continueResult.toolsUsed);
-                    currentInvestigationState = {
-                        ...newState,
-                        rawContext: continueResult.rawContext,
-                        toolCallsUsed: continueResult.toolCallsUsed,
-                        tokensUsed: continueResult.tokensUsed
-                    };
-                    console.log('[CTM] Updated investigation state, tools used:', continueResult.toolsUsed.join(', '));
-                } else {
-                    currentInvestigationState = null;
-                    console.log('[CTM] Investigation complete, no further continuation available');
-                }
-
-                // Update the summary for follow-up questions
-                currentSummary = continueResult.summary;
-
-                return continueResult;
-            });
-
-            currentPanel.show(summary, rawContext, context.extensionUri, result.canContinue);
+            panel.show(summary, rawContext, context.extensionUri, `${fileName}:${lineRange}`);
 
             progress.report({ increment: 100, message: "Done!" });
             console.log('[CTM] ========== Analysis Complete ==========');

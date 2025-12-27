@@ -6,8 +6,9 @@ Codebase Time Machine (CTM) is an MCP server for code history analysis. It conne
 
 ## Features
 
-- **35 investigation tools** for tracing code decisions through git history
+- **32 investigation tools** for tracing code decisions through git history
 - **Line-level context**: blame, commits, PRs, linked issues, and discussions in one call
+- **Automatic origin detection**: finds when code was first introduced, even across file renames
 - **SQLite caching** with intelligent TTLs (commits cached forever, PRs/issues for 1 hour)
 - **GitHub integration**: works with public repos, or private repos with a token
 - **Local git support**: also works with local repositories
@@ -96,13 +97,13 @@ The `GITHUB_TOKEN` is optional for public repositories but recommended for highe
 
 ## Tools
 
-CTM provides 35 tools organized by category:
+CTM provides 32 tools organized by category:
 
 ### GitHub Tools
 
 | Tool | Description |
 |------|-------------|
-| `get_line_context` | Why does this line exist? Blame, commit, PR, issues in one call |
+| `get_line_context` | Why does this line exist? Blame, commit, PR, issues, and auto-detected origin in one call |
 | `get_github_file` | Get file contents |
 | `get_github_file_history` | Commits that modified a file |
 | `get_github_file_symbols` | Extract functions/classes from a file |
@@ -110,36 +111,33 @@ CTM provides 35 tools organized by category:
 | `get_github_commits_batch` | Fetch multiple commits at once |
 | `get_github_repo` | Repository information |
 | `get_github_branches` | List branches |
-| `list_github_tree` | Browse repository file structure |
+| `list_github_tree` | Browse repository file structure (optionally with activity info) |
 | `get_pr` | Pull request details with comments and reviews |
 | `get_issue` | Issue details with comments |
 | `search_prs_for_commit` | Find PRs containing a commit |
 | `search_github_code` | Search code in repository |
 | `search_github_commits` | Search commit messages |
-| `pickaxe_search_github` | Find when code was added/removed |
+| `pickaxe_search_github` | Find when code was added/removed (follows file renames) |
 | `trace_github_symbol_history` | Track function/class evolution across commits |
-| `get_code_context` | Full decision chain: file commits, PRs, issues |
 | `get_code_owners` | Top contributors for a file |
 | `get_change_coupling` | Files that frequently change together |
-| `get_activity_summary` | Repository activity overview |
-| `get_recent_activity` | Recent commits for file/directory |
+| `get_activity_summary` | Repository/path activity overview |
 | `explain_file` | File overview: purpose, symbols, contributors |
-| `explain_directory` | Directory overview and structure |
 
 ### Local Git Tools
 
 | Tool | Description |
 |------|-------------|
-| `get_local_line_context` | Line context with auto GitHub remote detection |
+| `get_local_line_context` | Flagship local tool: blame + origin detection + PR/issue context (auto-bridges to GitHub) |
 | `get_repo_info` | Repository metadata |
 | `list_branches` | List branches with last commit |
 | `get_commit` | Commit details |
 | `get_commit_diff` | Detailed diff for a commit |
 | `trace_file_history` | Complete file change history |
 | `get_file_at_commit` | File contents at specific commit |
-| `pickaxe_search` | Find when code was added/removed |
+| `pickaxe_search` | Find when code was added/removed (follows file renames) |
 | `explain_commit` | Analyze commit intent (bugfix, feature, refactor) |
-| `blame_with_context` | Enhanced git blame with PR/issue links |
+| `blame_with_context` | Git blame with commit metadata (fallback for non-GitHub repos) |
 | `get_file_symbols` | Extract functions/classes from local file |
 | `trace_symbol_history` | Track symbol changes in local repo |
 

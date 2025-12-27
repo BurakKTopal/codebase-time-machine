@@ -8,6 +8,7 @@ using GitPython.
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from git import Repo
 from git.exc import GitCommandError, InvalidGitRepositoryError, NoSuchPathError
@@ -22,6 +23,13 @@ from ctm_mcp_server.models.git_models import (
     DiffHunk,
     FileChange,
 )
+
+
+def _ensure_str(value: str | bytes) -> str:
+    """Convert bytes to str if necessary."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 class GitRepoError(Exception):
@@ -108,6 +116,7 @@ class GitRepo:
         # Local branches
         for head in self._repo.heads:
             commit = head.commit
+            message = _ensure_str(commit.message)
             branches.append(
                 Branch(
                     name=head.name,
@@ -115,7 +124,7 @@ class GitRepo:
                     is_remote=False,
                     last_commit_sha=commit.hexsha,
                     last_commit_date=datetime.fromtimestamp(commit.committed_date, tz=UTC),
-                    last_commit_message=commit.message.split("\n")[0],
+                    last_commit_message=message.split("\n")[0],
                 )
             )
 
@@ -124,6 +133,7 @@ class GitRepo:
             for ref in self._repo.refs:
                 if ref.name.startswith("origin/") and ref.name != "origin/HEAD":
                     commit = ref.commit
+                    message = _ensure_str(commit.message)
                     branches.append(
                         Branch(
                             name=ref.name,
@@ -131,7 +141,7 @@ class GitRepo:
                             is_remote=True,
                             last_commit_sha=commit.hexsha,
                             last_commit_date=datetime.fromtimestamp(commit.committed_date, tz=UTC),
-                            last_commit_message=commit.message.split("\n")[0],
+                            last_commit_message=message.split("\n")[0],
                         )
                     )
 
@@ -156,11 +166,12 @@ class GitRepo:
 
         return self._make_commit(git_commit)
 
-    def _make_commit(self, git_commit) -> Commit:
+    def _make_commit(self, git_commit: Any) -> Commit:
         """Convert gitpython commit to our Commit model."""
         # Parse PR and issue numbers from commit message
-        pr_number = self._extract_pr_number(git_commit.message)
-        issue_numbers = self._extract_issue_numbers(git_commit.message)
+        message = _ensure_str(git_commit.message)
+        pr_number = self._extract_pr_number(message)
+        issue_numbers = self._extract_issue_numbers(message)
 
         # Get file changes
         files_changed: list[FileChange] = []
@@ -189,8 +200,8 @@ class GitRepo:
         return Commit(
             sha=git_commit.hexsha,
             short_sha=git_commit.hexsha[:7],
-            message=git_commit.message,
-            subject=git_commit.message.split("\n")[0],
+            message=message,
+            subject=message.split("\n")[0],
             author=Author(
                 name=git_commit.author.name or "Unknown",
                 email=git_commit.author.email or "",
@@ -250,7 +261,11 @@ class GitRepo:
         lines: list[BlameLine] = []
         line_number = 0
 
-        for commit, content_lines in blame_data:
+        for blame_entry in blame_data:  # type: ignore[union-attr]
+            # blame_entry is a tuple of (commit, list of lines)
+            commit: Any = blame_entry[0]
+            content_lines: list[Any] = list(blame_entry[1])  # type: ignore[arg-type]
+            commit_message = _ensure_str(commit.message)
             for content in content_lines:
                 line_number += 1
 
@@ -260,10 +275,13 @@ class GitRepo:
                 if end_line and line_number > end_line:
                     break
 
+                content_str = (
+                    _ensure_str(content) if isinstance(content, (str, bytes)) else str(content)
+                )
                 lines.append(
                     BlameLine(
                         line_number=line_number,
-                        content=content,
+                        content=content_str,
                         commit_sha=commit.hexsha,
                         commit_short_sha=commit.hexsha[:7],
                         author=Author(
@@ -271,9 +289,9 @@ class GitRepo:
                             email=commit.author.email or "",
                         ),
                         committed_date=datetime.fromtimestamp(commit.committed_date, tz=UTC),
-                        commit_message=commit.message.split("\n")[0],
-                        pr_number=self._extract_pr_number(commit.message),
-                        issue_numbers=self._extract_issue_numbers(commit.message),
+                        commit_message=commit_message.split("\n")[0],
+                        pr_number=self._extract_pr_number(commit_message),
+                        issue_numbers=self._extract_issue_numbers(commit_message),
                     )
                 )
 
@@ -316,7 +334,7 @@ class GitRepo:
             # Parse hunks from diff
             hunks: list[DiffHunk] = []
             if diff.diff:
-                hunks = self._parse_diff_hunks(diff.diff.decode("utf-8", errors="replace"))
+                hunks = self._parse_diff_hunks(_ensure_str(diff.diff))
 
             result.append(
                 DiffFile(
@@ -413,7 +431,8 @@ class GitRepo:
         try:
             commit = self._repo.commit(sha)
             blob = commit.tree / file_path
-            return blob.data_stream.read().decode("utf-8", errors="replace")
+            content: bytes = blob.data_stream.read()
+            return content.decode("utf-8", errors="replace")
         except KeyError as err:
             raise GitRepoError(f"File not found at commit {sha}: {file_path}") from err
         except Exception as e:
@@ -425,6 +444,7 @@ class GitRepo:
         file_path: str | None = None,
         max_commits: int = 20,
         regex: bool = False,
+        follow_renames: bool = True,
     ) -> list[Commit]:
         """Find commits that introduced or removed a specific string.
 
@@ -437,6 +457,9 @@ class GitRepo:
             file_path: Optional file path to limit the search.
             max_commits: Maximum number of commits to return.
             regex: If True, treat search_string as a regex (uses -G instead of -S).
+            follow_renames: If True, follow file renames when file_path is provided.
+                This ensures the true introduction commit is found even if the
+                file was renamed after the code was added.
 
         Returns:
             List of commits that added or removed the search string,
@@ -459,8 +482,12 @@ class GitRepo:
                 log_kwargs["S"] = search_string
 
             # Execute git log with pickaxe
+            # Use --follow to trace file renames when searching a specific file
             if file_path:
-                output = self._repo.git.log("--", file_path, **log_kwargs)
+                if follow_renames:
+                    output = self._repo.git.log("--follow", "--", file_path, **log_kwargs)
+                else:
+                    output = self._repo.git.log("--", file_path, **log_kwargs)
             else:
                 output = self._repo.git.log(**log_kwargs)
 

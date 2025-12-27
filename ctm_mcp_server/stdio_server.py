@@ -18,6 +18,7 @@ from mcp.types import TextContent, Tool
 from ctm_mcp_server.data.cache import get_cache
 from ctm_mcp_server.data.git_repo import GitRepo, GitRepoError
 from ctm_mcp_server.data.github_client import GitHubClient, GitHubClientError
+from ctm_mcp_server.models.github_models import Comment
 from ctm_mcp_server.models.result_models import IntentType
 from ctm_mcp_server.parsing.parser import CodeParser, ParserError
 
@@ -187,6 +188,11 @@ async def list_tools() -> list[Tool]:
                         "description": "If true, treat search_string as a regex pattern (default: false)",
                         "default": False,
                     },
+                    "follow_renames": {
+                        "type": "boolean",
+                        "description": "If true (default), follow file renames to find the true origin of code even if the file was renamed after the code was added.",
+                        "default": True,
+                    },
                 },
                 "required": ["repo_path", "search_string"],
             },
@@ -223,6 +229,11 @@ async def list_tools() -> list[Tool]:
                         "description": "If true, treat search_string as a regex pattern (default: false)",
                         "default": False,
                     },
+                    "follow_renames": {
+                        "type": "boolean",
+                        "description": "If true (default), follow file renames to find the true origin of code even if the file was renamed.",
+                        "default": True,
+                    },
                 },
                 "required": ["owner", "repo", "search_string"],
             },
@@ -247,7 +258,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="blame_with_context",
-            description="Enhanced git blame that shows not just who changed each line, but links to PRs, issues, and explains the intent.",
+            description="Git blame with commit metadata. Shows who changed each line with commit details and extracts PR/issue references from commit messages. For full PR/issue context, use get_local_line_context instead.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -671,33 +682,6 @@ async def list_tools() -> list[Tool]:
         ),
         # Analysis tools - Phase C
         Tool(
-            name="get_code_context",
-            description="Trace the full decision chain for code: file commits → PRs → linked issues. Answers 'Why does this code exist?' by aggregating all context.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "File path relative to repo root",
-                    },
-                    "max_commits": {
-                        "type": "integer",
-                        "description": "Maximum commits to analyze (default: 10)",
-                        "default": 10,
-                    },
-                },
-                "required": ["owner", "repo", "path"],
-            },
-        ),
-        Tool(
             name="get_code_owners",
             description="Find who knows this code best by analyzing commit history. Returns contributors ranked by number of commits, lines changed, and recency.",
             inputSchema={
@@ -758,7 +742,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_activity_summary",
-            description="Get aggregated summary of repository activity: commits by type (bugfix/feature/etc), top contributors, most changed files, filtered by time range.",
+            description="Get aggregated summary of repository activity: commits by type (bugfix/feature/etc), top contributors, most changed files. Can filter by time range and path.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -777,7 +761,12 @@ async def list_tools() -> list[Tool]:
                     },
                     "path": {
                         "type": "string",
-                        "description": "Optional: filter to specific path/directory",
+                        "description": "Optional: filter to specific file or directory path",
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Maximum commits to analyze (default: 50)",
+                        "default": 50,
                     },
                 },
                 "required": ["owner", "repo"],
@@ -813,7 +802,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_github_tree",
-            description="Get the complete file tree of a GitHub repository in one fast API call. Essential for understanding codebase structure. Can filter by path prefix and file extension.",
+            description="Get the complete file tree of a GitHub repository in one fast API call. Essential for understanding codebase structure. Can filter by path prefix and file extension. Optionally includes activity info (contributors, recent commits).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -837,65 +826,10 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum directory depth to include (default: unlimited)",
                     },
-                },
-                "required": ["owner", "repo"],
-            },
-        ),
-        Tool(
-            name="explain_directory",
-            description="Get an overview of a directory: structure, file types, key files, recent activity, and purpose. Useful for understanding codebase layout.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Directory path relative to repo root (use '' or '.' for root)",
-                        "default": "",
-                    },
-                    "depth": {
-                        "type": "integer",
-                        "description": "How deep to explore subdirectories (default: 2)",
-                        "default": 2,
-                    },
-                },
-                "required": ["owner", "repo"],
-            },
-        ),
-        Tool(
-            name="get_recent_activity",
-            description="Get recent commit activity for a file or directory. Shows what changed recently, who made changes, and links to PRs.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "File or directory path (optional, defaults to entire repo)",
-                    },
-                    "days": {
-                        "type": "integer",
-                        "description": "Number of days to look back (default: 14)",
-                        "default": 14,
-                    },
-                    "max_commits": {
-                        "type": "integer",
-                        "description": "Maximum commits to return (default: 20)",
-                        "default": 20,
+                    "include_activity": {
+                        "type": "boolean",
+                        "description": "Include recent activity info: commits, contributors, key files (default: false)",
+                        "default": False,
                     },
                 },
                 "required": ["owner", "repo"],
@@ -986,6 +920,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("file_path"),
                 arguments.get("max_commits", 20),
                 arguments.get("regex", False),
+                arguments.get("follow_renames", True),
             )
         elif name == "pickaxe_search_github":
             result = await _pickaxe_search_github(
@@ -995,6 +930,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("path"),
                 arguments.get("max_commits", 20),
                 arguments.get("regex", False),
+                arguments.get("follow_renames", True),
             )
         elif name == "explain_commit":
             result = await _explain_commit(arguments["repo_path"], arguments["sha"])
@@ -1094,13 +1030,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 min(arguments.get("max_commits", 20), 50),  # Cap at 50 to limit API calls
             )
         # Analysis tools
-        elif name == "get_code_context":
-            result = await _get_code_context(
-                arguments["owner"],
-                arguments["repo"],
-                arguments["path"],
-                arguments.get("max_commits", 10),
-            )
         elif name == "get_code_owners":
             result = await _get_code_owners(
                 arguments["owner"],
@@ -1122,6 +1051,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["repo"],
                 arguments.get("days", 30),
                 arguments.get("path"),
+                arguments.get("max_commits", 50),
             )
         # Explanation & Onboarding tools
         elif name == "explain_file":
@@ -1138,21 +1068,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("path_prefix"),
                 arguments.get("extension"),
                 arguments.get("max_depth"),
-            )
-        elif name == "explain_directory":
-            result = await _explain_directory(
-                arguments["owner"],
-                arguments["repo"],
-                arguments.get("path", ""),
-                arguments.get("depth", 2),
-            )
-        elif name == "get_recent_activity":
-            result = await _get_recent_activity(
-                arguments["owner"],
-                arguments["repo"],
-                arguments.get("path"),
-                arguments.get("days", 14),
-                arguments.get("max_commits", 20),
+                arguments.get("include_activity", False),
             )
         elif name == "get_line_context":
             result = await _get_line_context(
@@ -1249,8 +1165,20 @@ async def _list_branches(repo_path: str, include_remote: bool = False) -> dict[s
 
 async def _get_commit(repo_path: str, sha: str) -> dict[str, Any]:
     """Get commit details."""
+    from ctm_mcp_server.utils import detect_github_remote
+
     repo = GitRepo(repo_path)
     commit = repo.get_commit(sha)
+
+    # Detect GitHub remote for constructing commit URL
+    github_info = detect_github_remote(repo)
+    html_url = None
+    pr_url = None
+    if github_info:
+        owner, repo_name = github_info
+        html_url = f"https://github.com/{owner}/{repo_name}/commit/{commit.sha}"
+        if commit.pr_number:
+            pr_url = f"https://github.com/{owner}/{repo_name}/pull/{commit.pr_number}"
 
     return {
         "success": True,
@@ -1275,6 +1203,8 @@ async def _get_commit(repo_path: str, sha: str) -> dict[str, Any]:
             ],
             "pr_number": commit.pr_number,
             "issue_numbers": commit.issue_numbers,
+            "html_url": html_url,
+            "pr_url": pr_url,
         },
     }
 
@@ -1348,43 +1278,114 @@ async def _get_file_at_commit(repo_path: str, sha: str, file_path: str) -> dict[
     }
 
 
+def _strip_comment_markers(text: str) -> str:
+    """Strip common comment markers to find core content.
+
+    This helps find the true introduction of code even if comment style changed
+    (e.g., /* */ to // or vice versa).
+    """
+    import re
+
+    # Remove common comment prefixes/suffixes
+    text = text.strip()
+    # Block comments: /* ... */ or /** ... */
+    text = re.sub(r"^/\*+\s*", "", text)
+    text = re.sub(r"\s*\*+/$", "", text)
+    # Line comments: // or #
+    text = re.sub(r"^//\s*", "", text)
+    text = re.sub(r"^#\s*", "", text)
+    # Leading asterisks in block comments (e.g., * line)
+    text = re.sub(r"^\*\s*", "", text)
+    return text.strip()
+
+
 async def _pickaxe_search(
     repo_path: str,
     search_string: str,
     file_path: str | None = None,
     max_commits: int = 20,
     regex: bool = False,
+    follow_renames: bool = True,
+    strip_comments: bool = True,
 ) -> dict[str, Any]:
-    """Find commits that introduced or removed a specific string using git pickaxe."""
+    """Find commits that introduced or removed a specific string using git pickaxe.
+
+    When file_path is provided and follow_renames is True (default), this will
+    trace through file renames to find the true introduction commit even if the
+    file was renamed after the code was added.
+
+    When strip_comments is True (default), common comment markers (// /* */ #)
+    are stripped from the search string to find the true introduction even if
+    comment style changed over time.
+    """
+    from ctm_mcp_server.utils import detect_github_remote
+
     repo = GitRepo(repo_path)
+
+    # Detect GitHub remote for constructing commit URLs
+    github_info = detect_github_remote(repo)
+    github_base_url = None
+    if github_info:
+        owner, repo_name = github_info
+        github_base_url = f"https://github.com/{owner}/{repo_name}"
+
+    # Try with original string first
+    original_search = search_string
     commits = repo.pickaxe_search(
         search_string=search_string,
         file_path=file_path,
         max_commits=max_commits,
         regex=regex,
+        follow_renames=follow_renames,
     )
+
+    # If strip_comments is enabled and we got few results, try without comment markers
+    stripped_search = None
+    if strip_comments and not regex:
+        stripped = _strip_comment_markers(search_string)
+        if stripped != search_string and len(stripped) > 5:
+            stripped_search = stripped
+            stripped_commits = repo.pickaxe_search(
+                search_string=stripped,
+                file_path=file_path,
+                max_commits=max_commits,
+                regex=regex,
+                follow_renames=follow_renames,
+            )
+            # Use stripped results if they found older commits
+            if stripped_commits:
+                if not commits:
+                    commits = stripped_commits
+                elif stripped_commits[-1].committed_date < commits[-1].committed_date:
+                    # Stripped search found older commits - use those
+                    commits = stripped_commits
+                    search_string = stripped
 
     # Format commits for output
     formatted_commits = []
     for commit in commits:
-        formatted_commits.append(
-            {
-                "sha": commit.sha,
-                "short_sha": commit.short_sha,
-                "author": commit.author.name,
-                "date": commit.committed_date.isoformat(),
-                "message": commit.subject,
-                "full_message": commit.message,
-                "pr_number": commit.pr_number,
-                "issue_numbers": commit.issue_numbers,
-                "files_changed": len(commit.files_changed),
-            }
-        )
+        commit_data = {
+            "sha": commit.sha,
+            "short_sha": commit.short_sha,
+            "author": commit.author.name,
+            "date": commit.committed_date.isoformat(),
+            "message": commit.subject,
+            "full_message": commit.message,
+            "pr_number": commit.pr_number,
+            "issue_numbers": commit.issue_numbers,
+            "files_changed": len(commit.files_changed),
+        }
+        # Add GitHub URL if available
+        if github_base_url:
+            commit_data["html_url"] = f"{github_base_url}/commit/{commit.sha}"
+            if commit.pr_number:
+                commit_data["pr_url"] = f"{github_base_url}/pull/{commit.pr_number}"
+        formatted_commits.append(commit_data)
 
     # Identify the "introduction" commit (last one in the list = oldest = when code was first added)
     introduction_commit = formatted_commits[-1] if formatted_commits else None
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "search_string": search_string,
         "file_path": file_path,
@@ -1392,8 +1393,22 @@ async def _pickaxe_search(
         "total_commits": len(formatted_commits),
         "commits": formatted_commits,
         "introduction_commit": introduction_commit,
-        "note": "The 'introduction_commit' is the oldest commit that added/removed this code (likely when it was first introduced). Commits are ordered newest to oldest.",
+        "note": "The 'introduction_commit' is the oldest commit that added/removed this code (likely when it was first introduced). Commits are ordered newest to oldest. When file_path is provided, file renames are followed by default to find the true origin.",
     }
+
+    # Add GitHub info if available
+    if github_info:
+        result["github_owner"] = github_info[0]
+        result["github_repo"] = github_info[1]
+        result["github_base_url"] = github_base_url
+
+    # Add info about stripped search if it was used
+    if stripped_search and search_string == stripped_search:
+        result["original_search"] = original_search
+        result["stripped_search"] = stripped_search
+        result["note"] += " Comment markers were stripped to find older commits."
+
+    return result
 
 
 async def _pickaxe_search_github(
@@ -1403,10 +1418,13 @@ async def _pickaxe_search_github(
     path: str | None = None,
     max_commits: int = 20,
     regex: bool = False,
+    follow_renames: bool = True,
 ) -> dict[str, Any]:
     """Find commits that introduced or removed a specific string via GitHub API.
 
     This is slower than local pickaxe but works for remote repos.
+    When path is provided and follow_renames is True (default), this will
+    trace through file renames to find the true introduction commit.
     """
     client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     result = await client.pickaxe_search(
@@ -1414,9 +1432,10 @@ async def _pickaxe_search_github(
         path=path,
         max_commits=max_commits,
         regex=regex,
+        follow_renames=follow_renames,
     )
 
-    return {
+    response = {
         "success": True,
         "search_string": search_string,
         "path": path,
@@ -1425,8 +1444,14 @@ async def _pickaxe_search_github(
         "total_commits": len(result.get("commits", [])),
         "commits": result.get("commits", []),
         "introduction_commit": result.get("introduction_commit"),
-        "note": "The 'introduction_commit' is the oldest commit that modified this code (likely when it was first introduced). This uses GitHub API and is slower than local pickaxe_search.",
+        "note": "The 'introduction_commit' is the oldest commit that modified this code (likely when it was first introduced). This uses GitHub API and is slower than local pickaxe_search. When path is provided, file renames are followed by default to find the true origin.",
     }
+
+    # Include rename chain if renames were followed
+    if result.get("rename_chain"):
+        response["rename_chain"] = result["rename_chain"]
+
+    return response
 
 
 async def _explain_commit(repo_path: str, sha: str) -> dict[str, Any]:
@@ -1646,13 +1671,20 @@ async def _get_local_line_context(
     history_depth: int = 1,
     ref: str | None = None,
 ) -> dict[str, Any]:
-    """Get line context for local repo (bridges to GitHub if remote exists).
+    """Get line context for local repo using LOCAL git blame, enriched with GitHub context.
 
-    If local repo has GitHub remote, uses full get_line_context capabilities.
-    Otherwise falls back to basic blame.
+    IMPORTANT: Always uses local git blame first to get accurate commit attribution
+    for the specific lines requested. This is more accurate than GitHub API's file
+    history which only shows recent commits, not the actual commits that touched
+    specific lines.
+
+    If local repo has GitHub remote, enriches blame results with PR/issue context.
 
     Args:
         ref: Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD.
+        history_depth: Number of historical commits to analyze for finding when
+            code was originally introduced (useful when recent commits only modified
+            surrounding code).
     """
     from ctm_mcp_server.utils import detect_github_remote
 
@@ -1663,36 +1695,384 @@ async def _get_local_line_context(
     if ref is None:
         ref = repo.current_branch or "HEAD"
 
+    line_end = line_end or line_start
+
+    # ALWAYS use local git blame first - this gives accurate per-line attribution
+    try:
+        blame_result = repo.get_blame(file_path, start_line=line_start, end_line=line_end)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to get blame: {e}",
+            "file_path": file_path,
+            "line_range": [line_start, line_end],
+        }
+
+    # Collect ALL unique blame commits for the requested lines
+    commit_info: dict[str, dict[str, Any]] = {}
+    commit_counts: dict[str, int] = {}
+    commit_lines: dict[str, list[int]] = {}  # Track which lines each commit modified
+
+    for line in blame_result.lines:
+        sha = line.commit_sha
+        commit_counts[sha] = commit_counts.get(sha, 0) + 1
+        if sha not in commit_lines:
+            commit_lines[sha] = []
+        commit_lines[sha].append(line.line_number)
+
+        if sha not in commit_info:
+            # Filter out PR number from issue_numbers - PR #230 shouldn't appear as issue #230
+            filtered_issues = [n for n in (line.issue_numbers or []) if n != line.pr_number]
+            commit_info[sha] = {
+                "sha": sha,
+                "message": line.commit_message,
+                "author": line.author.name,
+                "date": line.committed_date.isoformat(),
+                "message_signals": _extract_message_signals(line.commit_message),
+                "pr_number": line.pr_number,
+                "issue_numbers": filtered_issues,
+            }
+
+    if not commit_counts:
+        return {
+            "success": False,
+            "error": "No blame information found for the specified lines",
+            "file_path": file_path,
+            "line_range": [line_start, line_end],
+        }
+
+    # Primary blame commit is the one that touched most of the requested lines
+    primary_sha = max(commit_counts, key=commit_counts.get)  # type: ignore
+    primary_line = next(bl for bl in blame_result.lines if bl.commit_sha == primary_sha)
+
+    # Build blame_commits array with ALL unique commits, ordered by line count
+    blame_commits_list = []
+    for sha in sorted(commit_counts.keys(), key=lambda s: commit_counts[s], reverse=True):
+        info = commit_info[sha].copy()
+        info["line_count"] = commit_counts[sha]
+        info["lines"] = commit_lines[sha]
+        blame_commits_list.append(info)
+
+    # Get current content
+    current_content = "\n".join(line.content for line in blame_result.lines)
+
+    # Build GitHub URLs if available
+    github_base_url = None
     if github_info:
-        # Local repo has GitHub remote - use full context chain
         owner, repo_name = github_info
-        result = await _get_line_context(
-            owner=owner,
-            repo=repo_name,
-            file_path=file_path,
-            line_start=line_start,
-            line_end=line_end or line_start,
-            include_discussions=include_discussions,
-            history_depth=history_depth,
-            ref=ref,  # Pass the branch to GitHub API
+        github_base_url = f"https://github.com/{owner}/{repo_name}"
+
+    # Add URLs to blame commits
+    for bc in blame_commits_list:
+        if github_base_url:
+            bc["html_url"] = f"{github_base_url}/commit/{bc['sha']}"
+            if bc.get("pr_number"):
+                bc["pr_url"] = f"{github_base_url}/pull/{bc['pr_number']}"
+
+    # Build code_sections: group consecutive lines by their origin commit
+    # This provides a pre-analyzed breakdown for the agent
+    code_sections: list[dict[str, Any]] = []
+    if blame_result.lines:
+        current_section: dict[str, Any] | None = None
+
+        for line in blame_result.lines:
+            sha = line.commit_sha
+            if current_section is None or current_section["commit_sha"] != sha:
+                # Start new section
+                if current_section is not None:
+                    code_sections.append(current_section)
+
+                # Get commit info for this section
+                ci = commit_info.get(sha, {})
+                current_section = {
+                    "lines": [line.line_number],
+                    "line_start": line.line_number,
+                    "line_end": line.line_number,
+                    "content": [line.content],
+                    "commit_sha": sha,
+                    "commit_short_sha": sha[:7],
+                    "author": ci.get("author", line.author.name),
+                    "date": ci.get("date", line.committed_date.isoformat()),
+                    "message": ci.get("message", line.commit_message),
+                    "pr_number": ci.get("pr_number"),
+                    "html_url": f"{github_base_url}/commit/{sha}" if github_base_url else None,
+                    "pr_url": f"{github_base_url}/pull/{ci.get('pr_number')}"
+                    if github_base_url and ci.get("pr_number")
+                    else None,
+                }
+            else:
+                # Extend current section
+                current_section["lines"].append(line.line_number)
+                current_section["line_end"] = line.line_number
+                current_section["content"].append(line.content)
+
+        # Don't forget the last section
+        if current_section is not None:
+            code_sections.append(current_section)
+
+        # Convert content arrays to strings
+        for section in code_sections:
+            section["content"] = "\n".join(section["content"])
+            section["line_range"] = (
+                f"{section['line_start']}-{section['line_end']}"
+                if section["line_start"] != section["line_end"]
+                else str(section["line_start"])
+            )
+
+        # AUTO-PICKAXE: Find true origin for each code section
+        # This eliminates the need for the agent to manually call pickaxe_search
+        for section in code_sections:
+            section["origin"] = None  # Will be populated if pickaxe finds origin
+            try:
+                # Extract a distinctive code string from this section
+                # Use the longest non-trivial line for better search accuracy
+                content_lines = section["content"].split("\n")
+                search_candidates = [
+                    line.strip()
+                    for line in content_lines
+                    if len(line.strip()) > 15
+                    and not line.strip().startswith("//")
+                    and not line.strip().startswith("#")
+                ]
+                if search_candidates:
+                    # Use the longest line as it's most distinctive
+                    search_string = max(search_candidates, key=len)
+
+                    # Run pickaxe to find when this code was first introduced
+                    pickaxe_results = repo.pickaxe_search(
+                        search_string=search_string,
+                        file_path=file_path,
+                        max_commits=5,
+                        follow_renames=True,
+                    )
+
+                    if pickaxe_results:
+                        # The oldest commit is the true origin (last in the list)
+                        origin_commit = pickaxe_results[-1]
+                        origin_sha = origin_commit.sha
+
+                        # Add origin info to section
+                        section["origin"] = {
+                            "sha": origin_sha,
+                            "short_sha": origin_sha[:7],
+                            "author": origin_commit.author.name,
+                            "date": origin_commit.committed_date.isoformat(),
+                            "message": _truncate(origin_commit.subject, 100),
+                            "html_url": f"{github_base_url}/commit/{origin_sha}"
+                            if github_base_url
+                            else None,
+                            "search_string_used": search_string[:50] + "..."
+                            if len(search_string) > 50
+                            else search_string,
+                            "is_same_as_last_modified": origin_sha == section["commit_sha"],
+                        }
+                        # Add PR info if available
+                        if hasattr(origin_commit, "pr_number") and origin_commit.pr_number:
+                            section["origin"]["pr_number"] = origin_commit.pr_number
+                            if github_base_url:
+                                section["origin"]["pr_url"] = (
+                                    f"{github_base_url}/pull/{origin_commit.pr_number}"
+                                )
+            except Exception as e:
+                # Pickaxe failed for this section - not critical, continue
+                section["origin_error"] = str(e)
+
+    # Build result - NOTE: blame shows LAST TOUCH, not original introduction
+    result: dict[str, Any] = {
+        "file_path": file_path,
+        "line_range": [line_start, line_end],
+        "current_content": current_content,
+        # Explanation of what this data means - helps agent understand the difference
+        "interpretation": "Each code section includes both 'last_modified_by' (who last touched the code) and 'origin' (when the code was first introduced, found via auto-pickaxe). If origin differs from last_modified, the code was moved/refactored.",
+        # Primary commit that last modified these lines (clearer name)
+        "last_modified_by": {
+            "sha": primary_sha,
+            "message": primary_line.commit_message,
+            "author": primary_line.author.name,
+            "date": primary_line.committed_date.isoformat(),
+            "message_signals": _extract_message_signals(primary_line.commit_message),
+            "html_url": f"{github_base_url}/commit/{primary_sha}" if github_base_url else None,
+            "note": "This is the LAST TOUCH, not necessarily the original author",
+        },
+        # Backwards compatible alias
+        "blame_commit": {
+            "sha": primary_sha,
+            "message": primary_line.commit_message,
+            "author": primary_line.author.name,
+            "date": primary_line.committed_date.isoformat(),
+            "message_signals": _extract_message_signals(primary_line.commit_message),
+            "html_url": f"{github_base_url}/commit/{primary_sha}" if github_base_url else None,
+        },
+        # ALL commits that last modified lines in selection (clearer name)
+        "last_modified_commits": blame_commits_list,
+        # Backwards compatible alias
+        "blame_commits": blame_commits_list,
+        # Pre-analyzed code sections grouped by last-touch commit
+        "code_sections": code_sections,
+        "historical_commits": [],
+        "pull_request": None,
+        "linked_issues": [],
+        "github_remote": {"owner": github_info[0], "repo": github_info[1]} if github_info else None,
+        "context_availability": {
+            "available": ["file_content", "commit"],
+            "missing": [],
+            "confidence_hint": "medium",
+            "suggestions": [],
+        },
+    }
+
+    # Add note if multiple commits touch the selected lines
+    if len(blame_commits_list) > 1:
+        result["context_availability"]["suggestions"].append(
+            f"Note: {len(blame_commits_list)} different commits modified the selected lines"
         )
+
+    # Get historical commits if requested (using pickaxe with --follow for accuracy)
+    if history_depth > 1:
+        try:
+            # Use the actual line content to find when it was introduced
+            # Take a representative line from the blamed content
+            search_content = blame_result.lines[0].content.strip() if blame_result.lines else None
+            if search_content and len(search_content) > 10:
+                historical = repo.pickaxe_search(
+                    search_string=search_content,
+                    file_path=file_path,
+                    max_commits=history_depth,
+                    follow_renames=True,
+                )
+                # Skip the first if it matches primary (avoid duplicate)
+                for commit in historical:
+                    if commit.sha != primary_sha:
+                        result["historical_commits"].append(
+                            {
+                                "sha": commit.sha,
+                                "message": _truncate(commit.subject, 300),
+                                "author": commit.author.name,
+                                "date": commit.committed_date.isoformat(),
+                                "message_signals": _extract_message_signals(commit.message),
+                                "stats": {
+                                    "additions": sum(
+                                        f.additions
+                                        for f in commit.files_changed
+                                        if hasattr(f, "additions")
+                                    ),
+                                    "deletions": sum(
+                                        f.deletions
+                                        for f in commit.files_changed
+                                        if hasattr(f, "deletions")
+                                    ),
+                                    "total": len(commit.files_changed),
+                                },
+                            }
+                        )
+                if result["historical_commits"]:
+                    result["context_availability"]["available"].append("historical_commits")
+                    result["context_availability"]["suggestions"].append(
+                        f"Found {len(result['historical_commits'])} historical commits for deeper context"
+                    )
+        except Exception:
+            pass  # Historical commits are optional enhancement
+
+    if github_info:
+        # Enrich with GitHub PR/issue context
+        owner, repo_name = github_info
         result["source"] = "github_remote"
         result["remote_url"] = f"https://github.com/{owner}/{repo_name}"
         result["ref"] = ref
-        return result
+
+        try:
+            client = GitHubClient(owner=owner, repo=repo_name, cache=_cache)
+
+            # Find PR for the blame commit
+            prs = await client.search_prs_for_commit(primary_sha)
+
+            if prs and len(prs) > 0:
+                # search_prs_for_commit returns list of PR numbers (integers)
+                pr_number = prs[0]
+                pr_detail = await client.get_pull_request(pr_number)
+
+                result["pull_request"] = {
+                    "number": pr_number,
+                    "title": pr_detail.title,
+                    "body": _truncate(pr_detail.body or "", 500),
+                    "author": pr_detail.author.login if pr_detail.author else "",
+                    "state": pr_detail.state,
+                    "relevant_discussions": [],
+                    "review_summary": None,
+                }
+                result["context_availability"]["available"].append("pull_request")
+
+                # Get PR discussions if requested
+                if include_discussions:
+                    try:
+                        comments = await client.get_pr_comments(pr_number)
+                        review_comments = await client.get_pr_review_comments(pr_number)
+                        all_comments = comments + review_comments
+                        relevant = _filter_relevant_discussions(all_comments)
+                        result["pull_request"]["relevant_discussions"] = relevant[:5]
+
+                        reviews = await client.get_pr_reviews(pr_number)
+                        result["pull_request"]["review_summary"] = _summarize_reviews(reviews)
+                    except Exception:
+                        pass
+
+                # Find linked issues from multiple sources:
+                # 1. Text-based: Parse PR title, body, and commit message for issue references
+                issue_refs_text = _extract_issue_references(
+                    (pr_detail.title or "")
+                    + " "
+                    + (pr_detail.body or "")
+                    + " "
+                    + primary_line.commit_message
+                )
+                # 2. API-based: Get issues linked via GitHub's Development sidebar
+                try:
+                    issue_refs_api = await client.get_pr_linked_issues(pr_number)
+                except Exception:
+                    issue_refs_api = []
+
+                # Combine and deduplicate, excluding the PR number itself
+                issue_refs = list(set(issue_refs_text + issue_refs_api))
+                issue_refs = [n for n in issue_refs if n != pr_number]
+
+                for issue_num in issue_refs[:3]:
+                    try:
+                        issue = await client.get_issue(issue_num)
+                        result["linked_issues"].append(
+                            {
+                                "number": issue_num,
+                                "title": issue.title,
+                                "body": issue.body[:500] if issue.body else None,
+                                "author": issue.author.login if issue.author else None,
+                                "labels": [label.name for label in issue.labels],
+                                "state": issue.state,
+                                "html_url": issue.html_url,
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                if result["linked_issues"]:
+                    result["context_availability"]["available"].append("linked_issues")
+
+            result["context_availability"]["confidence_hint"] = (
+                "high" if result["pull_request"] else "medium"
+            )
+
+        except Exception as e:
+            result["context_availability"]["missing"].append("pull_request")
+            result["context_availability"]["suggestions"].append(
+                f"Could not fetch GitHub context: {e}"
+            )
     else:
-        # No GitHub remote - fall back to basic blame
-        blame_result = await _blame_with_context(
-            repo_path=repo_path,
-            file_path=file_path,
-            start_line=line_start,
-            end_line=line_end,
+        # No GitHub remote
+        result["source"] = "local_only"
+        result["context_availability"]["missing"].extend(["pull_request", "linked_issues"])
+        result["context_availability"]["suggestions"].append(
+            "Add a GitHub remote for full PR/issue context"
         )
-        blame_result["source"] = "local_only"
-        blame_result["note"] = (
-            "Local repo without GitHub remote. Add a GitHub remote for full PR/issue context."
-        )
-        return blame_result
+
+    return result
 
 
 # GitHub API tool implementations
@@ -1990,9 +2370,40 @@ async def _get_issue(owner: str, repo: str, issue_number: int) -> dict[str, Any]
 
 
 async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
-    """Search for PRs containing a commit via GitHub API."""
+    """Search for PRs containing a commit via GitHub API.
+
+    Returns both PR numbers and basic details (title, state, author) for each PR found.
+    """
     client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     pr_numbers = await client.search_prs_for_commit(sha)
+
+    # Fetch basic details for each PR found
+    prs_with_details = []
+    for pr_num in pr_numbers[:5]:  # Limit to first 5 PRs to avoid too many API calls
+        try:
+            pr_detail = await client.get_pull_request(pr_num)
+            prs_with_details.append(
+                {
+                    "number": pr_num,
+                    "title": pr_detail.title,
+                    "state": pr_detail.state,
+                    "author": pr_detail.author.login if pr_detail.author else None,
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
+                    "merged_at": pr_detail.merged_at.isoformat() if pr_detail.merged_at else None,
+                    "body": _truncate(pr_detail.body or "", 300),
+                }
+            )
+        except Exception:
+            # If we can't get details, include just the number
+            prs_with_details.append(
+                {
+                    "number": pr_num,
+                    "title": None,
+                    "state": None,
+                    "author": None,
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
+                }
+            )
 
     return {
         "success": True,
@@ -2000,6 +2411,7 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
         "repo": repo,
         "sha": sha,
         "pr_numbers": pr_numbers,
+        "prs": prs_with_details,  # NEW: Include full PR details
         "total_found": len(pr_numbers),
     }
 
@@ -2440,98 +2852,6 @@ async def _trace_github_symbol_history(
 
 
 # Analysis tool implementations
-async def _get_code_context(owner: str, repo: str, path: str, max_commits: int) -> dict[str, Any]:
-    """Get full decision chain: commits → PRs → issues for a file."""
-    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
-
-    # Get recent commits for this file
-    commits = await client.list_commits(path=path, per_page=max_commits)
-
-    if not commits:
-        return {
-            "success": False,
-            "error": f"No commits found for file: {path}",
-        }
-
-    # Build context chain
-    context_chain: list[dict[str, Any]] = []
-    prs_seen: set[int] = set()
-    issues_seen: set[int] = set()
-
-    for commit in commits:
-        commit_context: dict[str, Any] = {
-            "commit": {
-                "sha": commit["short_sha"],
-                "message": commit["subject"],
-                "author": commit["author"]["name"],
-                "date": commit["author"]["date"],
-                "html_url": commit.get("html_url"),
-            },
-            "prs": [],
-            "issues": [],
-        }
-
-        # Find PRs for this commit
-        try:
-            pr_numbers = await client.search_prs_for_commit(commit["sha"])
-            for pr_num in pr_numbers[:3]:  # Limit to 3 PRs per commit
-                if pr_num in prs_seen:
-                    continue
-                prs_seen.add(pr_num)
-
-                try:
-                    pr = await client.get_pull_request(pr_num)
-                    pr_info = {
-                        "number": pr.number,
-                        "title": pr.title,
-                        "state": pr.state.value,
-                        "author": pr.author.login,
-                        "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
-                        "html_url": pr.html_url,
-                        "linked_issues": pr.linked_issues,
-                    }
-                    commit_context["prs"].append(pr_info)
-
-                    # Fetch linked issues
-                    for issue_num in pr.linked_issues:
-                        if issue_num in issues_seen:
-                            continue
-                        issues_seen.add(issue_num)
-
-                        try:
-                            issue = await client.get_issue(issue_num)
-                            issue_info = {
-                                "number": issue.number,
-                                "title": issue.title,
-                                "state": issue.state.value,
-                                "author": issue.author.login,
-                                "labels": [lbl.name for lbl in issue.labels],
-                                "html_url": issue.html_url,
-                            }
-                            commit_context["issues"].append(issue_info)
-                        except GitHubClientError:
-                            pass
-
-                except GitHubClientError:
-                    pass
-
-        except GitHubClientError:
-            pass
-
-        context_chain.append(commit_context)
-
-    return {
-        "success": True,
-        "owner": owner,
-        "repo": repo,
-        "path": path,
-        "total_commits": len(commits),
-        "total_prs_found": len(prs_seen),
-        "total_issues_found": len(issues_seen),
-        "context_chain": context_chain,
-    }
-
-
 async def _get_code_owners(owner: str, repo: str, path: str, max_commits: int) -> dict[str, Any]:
     """Find who knows this code best by analyzing commit history."""
     client = GitHubClient(owner=owner, repo=repo, cache=_cache)
@@ -2645,7 +2965,7 @@ async def _get_change_coupling(
         }
 
     # Calculate coupling ratio and filter
-    coupled_files = []
+    coupled_files: list[dict[str, Any]] = []
     for file_path, count in co_changes.items():
         coupling_ratio = count / total_commits_analyzed
         if coupling_ratio >= min_coupling:
@@ -2677,7 +2997,7 @@ async def _get_change_coupling(
 
 
 async def _get_activity_summary(
-    owner: str, repo: str, days: int, path: str | None
+    owner: str, repo: str, days: int, path: str | None, max_commits: int = 50
 ) -> dict[str, Any]:
     """Get aggregated summary of repository activity."""
     from datetime import datetime, timedelta
@@ -2692,11 +3012,11 @@ async def _get_activity_summary(
     query = f"committer-date:>{date_str}"
     if path:
         # Note: GitHub commit search doesn't support path filter, use list_commits instead
-        commits = await client.list_commits(path=path, per_page=100)
+        commits = await client.list_commits(path=path, per_page=max_commits)
         # Filter by date manually
         commits = [c for c in commits if c["author"]["date"] and c["author"]["date"] >= date_str]
     else:
-        result = await client.search_commits(query, per_page=100)
+        result = await client.search_commits(query, per_page=max_commits)
         commits = result.get("items", [])
 
     if not commits:
@@ -2865,6 +3185,7 @@ async def _list_github_tree(
     path_prefix: str | None,
     extension: str | None,
     max_depth: int | None,
+    include_activity: bool = False,
 ) -> dict[str, Any]:
     """Get complete file tree of a repository."""
     client = GitHubClient(owner=owner, repo=repo, cache=_cache)
@@ -2912,7 +3233,7 @@ async def _list_github_tree(
     dirs.sort(key=lambda x: x["path"])
     files.sort(key=lambda x: x["path"])
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "owner": owner,
         "repo": repo,
@@ -2930,78 +3251,21 @@ async def _list_github_tree(
         "files": [{"path": f["path"], "size": f.get("size")} for f in files[:100]],
     }
 
+    # Add activity info if requested
+    if include_activity:
+        # Get recent commits for this path
+        commits = await client.list_commits(path=path_prefix, per_page=10)
 
-async def _explain_directory(owner: str, repo: str, path: str, _depth: int) -> dict[str, Any]:
-    """Get overview of a directory structure."""
-    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
+        # Analyze activity
+        author_counts: dict[str, int] = {}
+        for commit in commits:
+            author = commit["author"]["name"]
+            author_counts[author] = author_counts.get(author, 0) + 1
 
-    # Normalize path
-    if path in (".", ""):
-        path = ""
+        # Sort files by size to find key files
+        files_by_size = sorted(files, key=lambda x: x.get("size", 0), reverse=True)
 
-    # Get directory contents using get_file_contents (works for dirs too)
-    try:
-        # For root, use empty string or "."
-        dir_data = await client.get_file_contents(path if path else ".")
-    except GitHubClientError as e:
-        return {"success": False, "error": f"Could not fetch directory: {e}"}
-
-    # Check if it's a directory
-    if dir_data.get("type") != "directory":
-        return {"success": False, "error": f"Path is not a directory: {path}"}
-
-    contents = dir_data.get("entries", [])
-
-    # Categorize contents
-    dirs: list[dict[str, Any]] = []
-    files: list[dict[str, Any]] = []
-    file_types: dict[str, int] = {}
-
-    for item in contents:
-        if item["type"] == "dir":
-            dirs.append(
-                {
-                    "name": item["name"],
-                    "path": item["path"],
-                }
-            )
-        else:
-            files.append(
-                {
-                    "name": item["name"],
-                    "path": item["path"],
-                    "size": item.get("size", 0),
-                }
-            )
-            # Count file types
-            ext = "." + item["name"].split(".")[-1] if "." in item["name"] else "(no ext)"
-            file_types[ext] = file_types.get(ext, 0) + 1
-
-    # Sort files by size to find key files
-    files.sort(key=lambda x: x.get("size", 0), reverse=True)
-
-    # Get recent commits for this path
-    commits = await client.list_commits(path=path if path else None, per_page=10)
-
-    # Analyze activity
-    author_counts: dict[str, int] = {}
-    for commit in commits:
-        author = commit["author"]["name"]
-        author_counts[author] = author_counts.get(author, 0) + 1
-
-    return {
-        "success": True,
-        "owner": owner,
-        "repo": repo,
-        "path": path or "(root)",
-        "structure": {
-            "total_dirs": len(dirs),
-            "total_files": len(files),
-            "directories": dirs[:20],  # Limit
-            "files": files[:30],  # Limit
-            "file_types": dict(sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:10]),
-        },
-        "activity": {
+        result["activity"] = {
             "recent_commits": len(commits),
             "contributors": [
                 {"name": name, "commits": count}
@@ -3009,80 +3273,10 @@ async def _explain_directory(owner: str, repo: str, path: str, _depth: int) -> d
                     :5
                 ]
             ],
-        },
-        "key_files": [f["name"] for f in files[:5]],  # Largest files are often important
-    }
-
-
-async def _get_recent_activity(
-    owner: str, repo: str, path: str | None, days: int, max_commits: int
-) -> dict[str, Any]:
-    """Get recent commit activity for a path."""
-    from datetime import datetime, timedelta
-
-    client = GitHubClient(owner=owner, repo=repo, cache=_cache)
-
-    # Calculate date threshold
-    since_date = datetime.now() - timedelta(days=days)
-    date_str = since_date.strftime("%Y-%m-%d")
-
-    # Get commits
-    commits = await client.list_commits(path=path, per_page=max_commits)
-
-    # Filter by date
-    recent_commits = [c for c in commits if c["author"]["date"] and c["author"]["date"] >= date_str]
-
-    if not recent_commits:
-        return {
-            "success": True,
-            "owner": owner,
-            "repo": repo,
-            "path": path,
-            "days": days,
-            "total_commits": 0,
-            "message": f"No commits in the last {days} days",
         }
+        result["key_files"] = [f["path"].split("/")[-1] for f in files_by_size[:5]]
 
-    # Build activity list with PR links
-    activities: list[dict[str, Any]] = []
-    for commit in recent_commits:
-        activity: dict[str, Any] = {
-            "sha": commit["short_sha"],
-            "message": commit["subject"],
-            "author": commit["author"]["name"],
-            "date": commit["author"]["date"],
-            "html_url": commit.get("html_url"),
-        }
-
-        # Try to find associated PR
-        try:
-            pr_numbers = await client.search_prs_for_commit(commit["sha"])
-            if pr_numbers:
-                activity["pr_number"] = pr_numbers[0]
-        except GitHubClientError:
-            pass
-
-        activities.append(activity)
-
-    # Aggregate by author
-    by_author: dict[str, int] = {}
-    for commit in recent_commits:
-        author = commit["author"]["name"]
-        by_author[author] = by_author.get(author, 0) + 1
-
-    return {
-        "success": True,
-        "owner": owner,
-        "repo": repo,
-        "path": path,
-        "days": days,
-        "total_commits": len(recent_commits),
-        "activities": activities,
-        "by_author": [
-            {"name": name, "commits": count}
-            for name, count in sorted(by_author.items(), key=lambda x: x[1], reverse=True)
-        ],
-    }
+    return result
 
 
 async def _get_line_context(
@@ -3185,16 +3379,15 @@ async def _get_line_context(
                 prs = await client.search_prs_for_commit(blame_commit_data["sha"])
 
                 if prs and len(prs) > 0:
-                    pr = prs[0]
-                    # Handle both dict and object formats
-                    pr_number = pr["number"] if isinstance(pr, dict) else pr.number
+                    # search_prs_for_commit returns list of PR numbers (integers)
+                    pr_number = prs[0]
                     pr_detail = await client.get_pull_request(pr_number)
 
                     result["pull_request"] = {
                         "number": pr_number,
                         "title": pr_detail.title,
                         "body": pr_detail.body or "",
-                        "author": pr_detail.user.login if pr_detail.user else "",
+                        "author": pr_detail.author.login if pr_detail.author else "",
                         "state": pr_detail.state,
                         "relevant_discussions": [],
                         "review_summary": None,
@@ -3215,10 +3408,24 @@ async def _get_line_context(
                         reviews = await client.get_pr_reviews(pr_number)
                         result["pull_request"]["review_summary"] = _summarize_reviews(reviews)
 
-                    # 5. Find linked issues
-                    issue_refs = _extract_issue_references(
-                        pr_detail.body + " " + blame_commit_data["message"]
+                    # 5. Find linked issues from multiple sources:
+                    # a. Text-based: Parse PR title, body, and commit message
+                    issue_refs_text = _extract_issue_references(
+                        (pr_detail.title or "")
+                        + " "
+                        + (pr_detail.body or "")
+                        + " "
+                        + blame_commit_data["message"]
                     )
+                    # b. API-based: Get issues linked via GitHub's Development sidebar
+                    try:
+                        issue_refs_api = await client.get_pr_linked_issues(pr_number)
+                    except Exception:
+                        issue_refs_api = []
+
+                    # Combine and deduplicate, excluding the PR number itself
+                    issue_refs = list(set(issue_refs_text + issue_refs_api))
+                    issue_refs = [n for n in issue_refs if n != pr_number]
 
                     for issue_num in issue_refs[:3]:
                         try:
@@ -3227,8 +3434,11 @@ async def _get_line_context(
                                 {
                                     "number": issue_num,
                                     "title": issue.title,
+                                    "body": issue.body[:500] if issue.body else None,
+                                    "author": issue.author.login if issue.author else None,
                                     "labels": [label.name for label in issue.labels],
                                     "state": issue.state,
+                                    "html_url": issue.html_url,
                                 }
                             )
                         except Exception:
@@ -3264,7 +3474,9 @@ def _extract_message_signals(message: str) -> list[str]:
     return signals
 
 
-def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
+def _filter_relevant_discussions(
+    comments: list[dict[str, Any]] | list[Comment],
+) -> list[dict[str, Any]]:
     """Filter to discussions indicating decisions/alternatives."""
     decision_keywords = [
         "instead",
@@ -3279,18 +3491,29 @@ def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
         "trade-off",
     ]
 
-    relevant = []
+    relevant: list[dict[str, Any]] = []
     for comment in comments:
-        body = (comment.get("body") or "").lower()
+        # Handle both Comment objects and dicts
+        if isinstance(comment, Comment):
+            body = (comment.body or "").lower()
+            author = comment.author.login if comment.author else ""
+            comment_body = comment.body or ""
+            has_review_id = comment.commit_sha is not None
+            html_url = ""
+        else:
+            body = (comment.get("body") or "").lower()
+            author = comment.get("user", {}).get("login", "")
+            comment_body = comment.get("body", "")
+            has_review_id = "pull_request_review_id" in comment
+            html_url = comment.get("html_url", "")
+
         if any(kw in body for kw in decision_keywords):
             relevant.append(
                 {
-                    "author": comment.get("user", {}).get("login", ""),
-                    "body": comment.get("body", "")[:500],
-                    "type": (
-                        "review_comment" if "pull_request_review_id" in comment else "pr_comment"
-                    ),
-                    "url": comment.get("html_url", ""),
+                    "author": author,
+                    "body": comment_body[:500],
+                    "type": "review_comment" if has_review_id else "pr_comment",
+                    "url": html_url,
                 }
             )
 
@@ -3298,11 +3521,38 @@ def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
 
 
 def _extract_issue_references(text: str) -> list[int]:
-    """Extract issue numbers from text."""
+    """Extract issue numbers from text.
+
+    Detects multiple patterns:
+    - #123 (standard GitHub reference)
+    - fixes #123, closes #123, resolves #123
+    - issue 123, issue #123
+    - Leading number in PR title like "123 Fix the bug"
+    """
     import re
 
-    matches = re.findall(r"#(\d+)", text)
-    return [int(m) for m in matches]
+    issues: set[int] = set()
+
+    # Standard #number references
+    for m in re.findall(r"#(\d+)", text):
+        issues.add(int(m))
+
+    # "fixes/closes/resolves issue 123" or "fixes/closes/resolves 123"
+    for m in re.findall(
+        r"(?:fix(?:es)?|close[sd]?|resolve[sd]?)\s+(?:issue\s+)?#?(\d+)", text, re.I
+    ):
+        issues.add(int(m))
+
+    # "issue 123" or "issue #123"
+    for m in re.findall(r"issue\s+#?(\d+)", text, re.I):
+        issues.add(int(m))
+
+    # Leading number at start of text (common in PR titles like "123 Fix bug")
+    leading = re.match(r"^(\d+)\s+\w", text.strip())
+    if leading:
+        issues.add(int(leading.group(1)))
+
+    return list(issues)
 
 
 def _summarize_reviews(reviews: list) -> dict:

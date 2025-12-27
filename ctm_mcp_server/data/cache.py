@@ -136,32 +136,40 @@ class Cache:
         key = self._make_key(namespace, *args)
         now = time.time()
 
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                SELECT value, expires_at
-                FROM cache_entries
-                WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)
-            """,
-                (key, now),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                # Update hit count
                 cursor.execute(
                     """
-                    UPDATE cache_entries
-                    SET hit_count = hit_count + 1
-                    WHERE key = ?
+                    SELECT value, expires_at
+                    FROM cache_entries
+                    WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)
                 """,
-                    (key,),
+                    (key, now),
                 )
-                conn.commit()
 
-                return json.loads(row["value"])
+                row = cursor.fetchone()
+                if row:
+                    # Update hit count
+                    cursor.execute(
+                        """
+                        UPDATE cache_entries
+                        SET hit_count = hit_count + 1
+                        WHERE key = ?
+                    """,
+                        (key,),
+                    )
+                    conn.commit()
+
+                    return json.loads(row["value"])
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                # Table doesn't exist - try to recreate schema
+                self._init_db()
+                # Return None for this call, subsequent calls will work
+            else:
+                raise
 
         return None
 
@@ -189,19 +197,37 @@ class Cache:
 
         expires_at = now + ttl if ttl > 0 else None
 
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                INSERT OR REPLACE INTO cache_entries
-                (key, value, namespace, created_at, expires_at, hit_count)
-                VALUES (?, ?, ?, ?, ?, 0)
-            """,
-                (key, json.dumps(value, default=str), namespace, now, expires_at),
-            )
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO cache_entries
+                    (key, value, namespace, created_at, expires_at, hit_count)
+                    VALUES (?, ?, ?, ?, ?, 0)
+                """,
+                    (key, json.dumps(value, default=str), namespace, now, expires_at),
+                )
 
-            conn.commit()
+                conn.commit()
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                # Table doesn't exist - try to recreate schema and retry
+                self._init_db()
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO cache_entries
+                        (key, value, namespace, created_at, expires_at, hit_count)
+                        VALUES (?, ?, ?, ?, ?, 0)
+                    """,
+                        (key, json.dumps(value, default=str), namespace, now, expires_at),
+                    )
+                    conn.commit()
+            else:
+                raise
 
     def delete(self, namespace: str, *args: Any) -> bool:
         """Delete entry from cache.

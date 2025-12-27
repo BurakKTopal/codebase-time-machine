@@ -49,26 +49,14 @@ export type AgentPhase = 'investigate' | 'synthesize' | 'complete';
 export type ProgressCallback = (update: ProgressUpdate) => void;
 
 /**
- * Investigation result with metadata for continue functionality
+ * Investigation result with metadata
  */
 export interface InvestigationResult {
     summary: string;
     rawContext: any;
     completionReason: 'natural' | 'limit_reached' | 'threshold_reached';
     contextQuality: 'high' | 'medium' | 'low';
-    canContinue: boolean;
     toolCallsUsed: number;
     toolsUsed: string[];
-    tokensUsed: number;
-}
-
-/**
- * State preserved for continuation
- */
-export interface InvestigationState {
-    summary: string;
-    toolsUsed: string[];
-    rawContext: any;
-    toolCallsUsed: number;
     tokensUsed: number;
 }
