@@ -425,6 +425,7 @@ class GitRepo:
         file_path: str | None = None,
         max_commits: int = 20,
         regex: bool = False,
+        follow_renames: bool = True,
     ) -> list[Commit]:
         """Find commits that introduced or removed a specific string.
 
@@ -437,6 +438,9 @@ class GitRepo:
             file_path: Optional file path to limit the search.
             max_commits: Maximum number of commits to return.
             regex: If True, treat search_string as a regex (uses -G instead of -S).
+            follow_renames: If True, follow file renames when file_path is provided.
+                This ensures the true introduction commit is found even if the
+                file was renamed after the code was added.
 
         Returns:
             List of commits that added or removed the search string,
@@ -459,8 +463,12 @@ class GitRepo:
                 log_kwargs["S"] = search_string
 
             # Execute git log with pickaxe
+            # Use --follow to trace file renames when searching a specific file
             if file_path:
-                output = self._repo.git.log("--", file_path, **log_kwargs)
+                if follow_renames:
+                    output = self._repo.git.log("--follow", "--", file_path, **log_kwargs)
+                else:
+                    output = self._repo.git.log("--", file_path, **log_kwargs)
             else:
                 output = self._repo.git.log(**log_kwargs)
 

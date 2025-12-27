@@ -538,15 +538,17 @@ class GitHubClient:
         # Extract files changed
         files = []
         for f in data.get("files", []):
-            files.append(
-                {
-                    "path": f.get("filename", ""),
-                    "status": f.get("status", "modified"),
-                    "additions": f.get("additions", 0),
-                    "deletions": f.get("deletions", 0),
-                    "patch": f.get("patch"),
-                }
-            )
+            file_info = {
+                "path": f.get("filename", ""),
+                "status": f.get("status", "modified"),
+                "additions": f.get("additions", 0),
+                "deletions": f.get("deletions", 0),
+                "patch": f.get("patch"),
+            }
+            # Capture previous filename for renames (used for following file history)
+            if f.get("status") == "renamed" and f.get("previous_filename"):
+                file_info["previous_path"] = f.get("previous_filename")
+            files.append(file_info)
 
         result = {
             "sha": data.get("sha", sha),
@@ -1043,6 +1045,7 @@ class GitHubClient:
         path: str | None = None,
         max_commits: int = 20,
         regex: bool = False,
+        follow_renames: bool = True,
     ) -> dict:
         """Find commits that introduced or removed a specific string.
 
@@ -1055,29 +1058,16 @@ class GitHubClient:
             path: Optional file path to limit the search.
             max_commits: Maximum number of commits to analyze.
             regex: If True, treat search_string as a regex pattern.
+            follow_renames: If True, follow file renames to find the true origin.
 
         Returns:
             Dictionary with:
                 - commits: List of commits where the string was added/removed
                 - introduction_commit: The oldest commit (likely when code was added)
                 - search_string: The string that was searched
+                - rename_chain: List of file paths if renames were followed
         """
         import asyncio
-
-        # Get file history
-        if path:
-            commits_data = await self.list_commits(path=path, per_page=max_commits)
-        else:
-            commits_data = await self.list_commits(per_page=max_commits)
-
-        if not commits_data:
-            return {
-                "commits": [],
-                "introduction_commit": None,
-                "search_string": search_string,
-            }
-
-        matching_commits = []
 
         # Compile regex if needed
         if regex:
@@ -1085,17 +1075,39 @@ class GitHubClient:
         else:
             pattern = None
 
-        async def check_commit(commit_summary: dict) -> dict | None:
-            """Check if a commit's diff contains the search string."""
+        all_matching_commits = []
+        total_analyzed = 0
+        rename_chain = [path] if path else []
+        current_path = path
+        seen_shas = set()  # Avoid processing the same commit twice
+
+        # Semaphore for limiting concurrent API requests
+        semaphore = asyncio.Semaphore(5)
+
+        async def check_commit(commit_summary: dict, check_path: str | None) -> tuple[dict | None, str | None]:
+            """Check if a commit's diff contains the search string.
+            Returns (commit_detail, previous_path) where previous_path is set if a rename was detected.
+            """
             sha = commit_summary["sha"]
             try:
-                commit_detail = await self.get_commit(sha)
+                async with semaphore:
+                    commit_detail = await self.get_commit(sha)
                 files = commit_detail.get("files", [])
+                detected_previous_path = None
 
                 for file_info in files:
-                    # If path filter specified, only check that file
-                    if path and file_info.get("path") != path:
-                        continue
+                    file_path = file_info.get("path", "")
+
+                    # Track renames - check both current path and previous path
+                    if check_path:
+                        # Check if this file matches our search path
+                        is_target_file = (file_path == check_path)
+                        # Also check if this is a rename TO our path (meaning the previous_path is what we want)
+                        if file_info.get("status") == "renamed" and file_path == check_path:
+                            detected_previous_path = file_info.get("previous_path")
+
+                        if not is_target_file:
+                            continue
 
                     patch = file_info.get("patch", "")
                     if not patch:
@@ -1104,47 +1116,83 @@ class GitHubClient:
                     # Check if the search string appears in added/removed lines
                     if regex and pattern:
                         if pattern.search(patch):
-                            return commit_detail
+                            return (commit_detail, detected_previous_path)
                     else:
                         if search_string in patch:
-                            return commit_detail
+                            return (commit_detail, detected_previous_path)
 
-                return None
+                # Even if no match, return previous_path if rename detected (for tracing history)
+                if detected_previous_path:
+                    return (None, detected_previous_path)
+                return (None, None)
             except Exception:
-                return None
+                return (None, None)
 
-        # Check commits in parallel (but limit concurrency)
-        semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
+        # Follow renames iteratively
+        while True:
+            # Get file history for current path
+            if current_path:
+                commits_data = await self.list_commits(path=current_path, per_page=max_commits)
+            else:
+                commits_data = await self.list_commits(per_page=max_commits)
+                # If no path specified, we can't follow renames
+                follow_renames = False
 
-        async def check_with_semaphore(commit: dict) -> dict | None:
-            async with semaphore:
-                return await check_commit(commit)
+            if not commits_data:
+                break
 
-        results = await asyncio.gather(*[check_with_semaphore(c) for c in commits_data])
+            # Filter out already-seen commits
+            new_commits = [c for c in commits_data if c["sha"] not in seen_shas]
+            for c in new_commits:
+                seen_shas.add(c["sha"])
 
-        # Filter out None results and collect matching commits
-        for result in results:
-            if result:
-                matching_commits.append(
-                    {
-                        "sha": result["sha"],
-                        "short_sha": result["sha"][:7],
-                        "message": result["message"],
-                        "subject": result["message"].split("\n")[0],
-                        "author": result["author"]["name"],
-                        "date": result["author"]["date"],
-                    }
-                )
+            total_analyzed += len(new_commits)
+
+            # Check commits in parallel
+            results = await asyncio.gather(*[check_commit(c, current_path) for c in new_commits])
+
+            # Collect matching commits and detect renames
+            previous_path = None
+            for result, prev_path in results:
+                if result:
+                    all_matching_commits.append(
+                        {
+                            "sha": result["sha"],
+                            "short_sha": result["sha"][:7],
+                            "message": result["message"],
+                            "subject": result["message"].split("\n")[0],
+                            "author": result["author"]["name"],
+                            "date": result["author"]["date"],
+                        }
+                    )
+                # Track the first rename we find (oldest one in this batch)
+                if prev_path and not previous_path:
+                    previous_path = prev_path
+
+            # If we found a rename and follow_renames is enabled, continue with old path
+            if follow_renames and previous_path and previous_path not in rename_chain:
+                rename_chain.append(previous_path)
+                current_path = previous_path
+                # Continue the loop to search with the old path
+            else:
+                # No more renames to follow
+                break
 
         # The introduction commit is the oldest one (last in the list)
-        introduction_commit = matching_commits[-1] if matching_commits else None
+        introduction_commit = all_matching_commits[-1] if all_matching_commits else None
 
-        return {
-            "commits": matching_commits,
+        result = {
+            "commits": all_matching_commits,
             "introduction_commit": introduction_commit,
             "search_string": search_string,
-            "total_analyzed": len(commits_data),
+            "total_analyzed": total_analyzed,
         }
+
+        # Include rename chain if renames were followed
+        if len(rename_chain) > 1:
+            result["rename_chain"] = rename_chain
+
+        return result
 
     @classmethod
     def from_remote_url(cls, remote_url: str, token: str | None = None) -> "GitHubClient":

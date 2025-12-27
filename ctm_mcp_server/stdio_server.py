@@ -187,6 +187,11 @@ async def list_tools() -> list[Tool]:
                         "description": "If true, treat search_string as a regex pattern (default: false)",
                         "default": False,
                     },
+                    "follow_renames": {
+                        "type": "boolean",
+                        "description": "If true (default), follow file renames to find the true origin of code even if the file was renamed after the code was added.",
+                        "default": True,
+                    },
                 },
                 "required": ["repo_path", "search_string"],
             },
@@ -222,6 +227,11 @@ async def list_tools() -> list[Tool]:
                         "type": "boolean",
                         "description": "If true, treat search_string as a regex pattern (default: false)",
                         "default": False,
+                    },
+                    "follow_renames": {
+                        "type": "boolean",
+                        "description": "If true (default), follow file renames to find the true origin of code even if the file was renamed.",
+                        "default": True,
                     },
                 },
                 "required": ["owner", "repo", "search_string"],
@@ -909,6 +919,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("file_path"),
                 arguments.get("max_commits", 20),
                 arguments.get("regex", False),
+                arguments.get("follow_renames", True),
             )
         elif name == "pickaxe_search_github":
             result = await _pickaxe_search_github(
@@ -918,6 +929,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("path"),
                 arguments.get("max_commits", 20),
                 arguments.get("regex", False),
+                arguments.get("follow_renames", True),
             )
         elif name == "explain_commit":
             result = await _explain_commit(arguments["repo_path"], arguments["sha"])
@@ -1251,21 +1263,78 @@ async def _get_file_at_commit(repo_path: str, sha: str, file_path: str) -> dict[
     }
 
 
+def _strip_comment_markers(text: str) -> str:
+    """Strip common comment markers to find core content.
+
+    This helps find the true introduction of code even if comment style changed
+    (e.g., /* */ to // or vice versa).
+    """
+    import re
+    # Remove common comment prefixes/suffixes
+    text = text.strip()
+    # Block comments: /* ... */ or /** ... */
+    text = re.sub(r'^/\*+\s*', '', text)
+    text = re.sub(r'\s*\*+/$', '', text)
+    # Line comments: // or #
+    text = re.sub(r'^//\s*', '', text)
+    text = re.sub(r'^#\s*', '', text)
+    # Leading asterisks in block comments (e.g., * line)
+    text = re.sub(r'^\*\s*', '', text)
+    return text.strip()
+
+
 async def _pickaxe_search(
     repo_path: str,
     search_string: str,
     file_path: str | None = None,
     max_commits: int = 20,
     regex: bool = False,
+    follow_renames: bool = True,
+    strip_comments: bool = True,
 ) -> dict[str, Any]:
-    """Find commits that introduced or removed a specific string using git pickaxe."""
+    """Find commits that introduced or removed a specific string using git pickaxe.
+
+    When file_path is provided and follow_renames is True (default), this will
+    trace through file renames to find the true introduction commit even if the
+    file was renamed after the code was added.
+
+    When strip_comments is True (default), common comment markers (// /* */ #)
+    are stripped from the search string to find the true introduction even if
+    comment style changed over time.
+    """
     repo = GitRepo(repo_path)
+
+    # Try with original string first
+    original_search = search_string
     commits = repo.pickaxe_search(
         search_string=search_string,
         file_path=file_path,
         max_commits=max_commits,
         regex=regex,
+        follow_renames=follow_renames,
     )
+
+    # If strip_comments is enabled and we got few results, try without comment markers
+    stripped_search = None
+    if strip_comments and not regex:
+        stripped = _strip_comment_markers(search_string)
+        if stripped != search_string and len(stripped) > 5:
+            stripped_search = stripped
+            stripped_commits = repo.pickaxe_search(
+                search_string=stripped,
+                file_path=file_path,
+                max_commits=max_commits,
+                regex=regex,
+                follow_renames=follow_renames,
+            )
+            # Use stripped results if they found older commits
+            if stripped_commits:
+                if not commits:
+                    commits = stripped_commits
+                elif stripped_commits[-1].committed_date < commits[-1].committed_date:
+                    # Stripped search found older commits - use those
+                    commits = stripped_commits
+                    search_string = stripped
 
     # Format commits for output
     formatted_commits = []
@@ -1287,7 +1356,7 @@ async def _pickaxe_search(
     # Identify the "introduction" commit (last one in the list = oldest = when code was first added)
     introduction_commit = formatted_commits[-1] if formatted_commits else None
 
-    return {
+    result = {
         "success": True,
         "search_string": search_string,
         "file_path": file_path,
@@ -1295,8 +1364,16 @@ async def _pickaxe_search(
         "total_commits": len(formatted_commits),
         "commits": formatted_commits,
         "introduction_commit": introduction_commit,
-        "note": "The 'introduction_commit' is the oldest commit that added/removed this code (likely when it was first introduced). Commits are ordered newest to oldest.",
+        "note": "The 'introduction_commit' is the oldest commit that added/removed this code (likely when it was first introduced). Commits are ordered newest to oldest. When file_path is provided, file renames are followed by default to find the true origin.",
     }
+
+    # Add info about stripped search if it was used
+    if stripped_search and search_string == stripped_search:
+        result["original_search"] = original_search
+        result["stripped_search"] = stripped_search
+        result["note"] += " Comment markers were stripped to find older commits."
+
+    return result
 
 
 async def _pickaxe_search_github(
@@ -1306,10 +1383,13 @@ async def _pickaxe_search_github(
     path: str | None = None,
     max_commits: int = 20,
     regex: bool = False,
+    follow_renames: bool = True,
 ) -> dict[str, Any]:
     """Find commits that introduced or removed a specific string via GitHub API.
 
     This is slower than local pickaxe but works for remote repos.
+    When path is provided and follow_renames is True (default), this will
+    trace through file renames to find the true introduction commit.
     """
     client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     result = await client.pickaxe_search(
@@ -1317,9 +1397,10 @@ async def _pickaxe_search_github(
         path=path,
         max_commits=max_commits,
         regex=regex,
+        follow_renames=follow_renames,
     )
 
-    return {
+    response = {
         "success": True,
         "search_string": search_string,
         "path": path,
@@ -1328,8 +1409,14 @@ async def _pickaxe_search_github(
         "total_commits": len(result.get("commits", [])),
         "commits": result.get("commits", []),
         "introduction_commit": result.get("introduction_commit"),
-        "note": "The 'introduction_commit' is the oldest commit that modified this code (likely when it was first introduced). This uses GitHub API and is slower than local pickaxe_search.",
+        "note": "The 'introduction_commit' is the oldest commit that modified this code (likely when it was first introduced). This uses GitHub API and is slower than local pickaxe_search. When path is provided, file renames are followed by default to find the true origin.",
     }
+
+    # Include rename chain if renames were followed
+    if result.get("rename_chain"):
+        response["rename_chain"] = result["rename_chain"]
+
+    return response
 
 
 async def _explain_commit(repo_path: str, sha: str) -> dict[str, Any]:
@@ -1549,13 +1636,20 @@ async def _get_local_line_context(
     history_depth: int = 1,
     ref: str | None = None,
 ) -> dict[str, Any]:
-    """Get line context for local repo (bridges to GitHub if remote exists).
+    """Get line context for local repo using LOCAL git blame, enriched with GitHub context.
 
-    If local repo has GitHub remote, uses full get_line_context capabilities.
-    Otherwise falls back to basic blame.
+    IMPORTANT: Always uses local git blame first to get accurate commit attribution
+    for the specific lines requested. This is more accurate than GitHub API's file
+    history which only shows recent commits, not the actual commits that touched
+    specific lines.
+
+    If local repo has GitHub remote, enriches blame results with PR/issue context.
 
     Args:
         ref: Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD.
+        history_depth: Number of historical commits to analyze for finding when
+            code was originally introduced (useful when recent commits only modified
+            surrounding code).
     """
     from ctm_mcp_server.utils import detect_github_remote
 
@@ -1566,36 +1660,179 @@ async def _get_local_line_context(
     if ref is None:
         ref = repo.current_branch or "HEAD"
 
+    line_end = line_end or line_start
+
+    # ALWAYS use local git blame first - this gives accurate per-line attribution
+    try:
+        blame_result = repo.get_blame(file_path, start_line=line_start, end_line=line_end)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to get blame: {e}",
+            "file_path": file_path,
+            "line_range": [line_start, line_end],
+        }
+
+    # Get the primary blame commit (most common commit for the requested lines)
+    commit_counts: dict[str, int] = {}
+    for line in blame_result.lines:
+        commit_counts[line.commit_sha] = commit_counts.get(line.commit_sha, 0) + 1
+
+    if not commit_counts:
+        return {
+            "success": False,
+            "error": "No blame information found for the specified lines",
+            "file_path": file_path,
+            "line_range": [line_start, line_end],
+        }
+
+    # Primary blame commit is the one that touched most of the requested lines
+    primary_sha = max(commit_counts, key=commit_counts.get)  # type: ignore
+    primary_line = next(l for l in blame_result.lines if l.commit_sha == primary_sha)
+
+    # Get current content
+    current_content = "\n".join(line.content for line in blame_result.lines)
+
+    # Build result with accurate local blame
+    result: dict[str, Any] = {
+        "file_path": file_path,
+        "line_range": [line_start, line_end],
+        "current_content": current_content,
+        "blame_commit": {
+            "sha": primary_sha,
+            "message": primary_line.commit_message,
+            "author": primary_line.author.name,
+            "date": primary_line.committed_date.isoformat(),
+            "message_signals": _extract_message_signals(primary_line.commit_message),
+        },
+        "historical_commits": [],
+        "pull_request": None,
+        "linked_issues": [],
+        "context_availability": {
+            "available": ["file_content", "commit"],
+            "missing": [],
+            "confidence_hint": "medium",
+            "suggestions": [],
+        },
+    }
+
+    # Get historical commits if requested (using pickaxe with --follow for accuracy)
+    if history_depth > 1:
+        try:
+            # Use the actual line content to find when it was introduced
+            # Take a representative line from the blamed content
+            search_content = blame_result.lines[0].content.strip() if blame_result.lines else None
+            if search_content and len(search_content) > 10:
+                historical = repo.pickaxe_search(
+                    search_string=search_content,
+                    file_path=file_path,
+                    max_commits=history_depth,
+                    follow_renames=True,
+                )
+                # Skip the first if it matches primary (avoid duplicate)
+                for commit in historical:
+                    if commit.sha != primary_sha:
+                        result["historical_commits"].append({
+                            "sha": commit.sha,
+                            "message": _truncate(commit.subject, 300),
+                            "author": commit.author.name,
+                            "date": commit.committed_date.isoformat(),
+                            "message_signals": _extract_message_signals(commit.message),
+                            "stats": {
+                                "additions": sum(f.additions for f in commit.files_changed if hasattr(f, 'additions')),
+                                "deletions": sum(f.deletions for f in commit.files_changed if hasattr(f, 'deletions')),
+                                "total": len(commit.files_changed),
+                            },
+                        })
+                if result["historical_commits"]:
+                    result["context_availability"]["available"].append("historical_commits")
+                    result["context_availability"]["suggestions"].append(
+                        f"Found {len(result['historical_commits'])} historical commits for deeper context"
+                    )
+        except Exception:
+            pass  # Historical commits are optional enhancement
+
     if github_info:
-        # Local repo has GitHub remote - use full context chain
+        # Enrich with GitHub PR/issue context
         owner, repo_name = github_info
-        result = await _get_line_context(
-            owner=owner,
-            repo=repo_name,
-            file_path=file_path,
-            line_start=line_start,
-            line_end=line_end or line_start,
-            include_discussions=include_discussions,
-            history_depth=history_depth,
-            ref=ref,  # Pass the branch to GitHub API
-        )
         result["source"] = "github_remote"
         result["remote_url"] = f"https://github.com/{owner}/{repo_name}"
         result["ref"] = ref
-        return result
+
+        try:
+            client = GitHubClient(owner=owner, repo=repo_name, cache=_cache)
+
+            # Find PR for the blame commit
+            prs = await client.search_prs_for_commit(primary_sha)
+
+            if prs and len(prs) > 0:
+                pr = prs[0]
+                pr_number = pr["number"] if isinstance(pr, dict) else pr.number
+                pr_detail = await client.get_pull_request(pr_number)
+
+                result["pull_request"] = {
+                    "number": pr_number,
+                    "title": pr_detail.title,
+                    "body": _truncate(pr_detail.body or "", 500),
+                    "author": pr_detail.user.login if pr_detail.user else "",
+                    "state": pr_detail.state,
+                    "relevant_discussions": [],
+                    "review_summary": None,
+                }
+                result["context_availability"]["available"].append("pull_request")
+
+                # Get PR discussions if requested
+                if include_discussions:
+                    try:
+                        comments = await client.get_pr_comments(pr_number)
+                        review_comments = await client.get_pr_review_comments(pr_number)
+                        all_comments = comments + review_comments
+                        relevant = _filter_relevant_discussions(all_comments)
+                        result["pull_request"]["relevant_discussions"] = relevant[:5]
+
+                        reviews = await client.get_pr_reviews(pr_number)
+                        result["pull_request"]["review_summary"] = _summarize_reviews(reviews)
+                    except Exception:
+                        pass
+
+                # Find linked issues
+                issue_refs = _extract_issue_references(
+                    (pr_detail.body or "") + " " + primary_line.commit_message
+                )
+
+                for issue_num in issue_refs[:3]:
+                    try:
+                        issue = await client.get_issue(issue_num)
+                        result["linked_issues"].append({
+                            "number": issue_num,
+                            "title": issue.title,
+                            "labels": [label.name for label in issue.labels],
+                            "state": issue.state,
+                        })
+                    except Exception:
+                        pass
+
+                if result["linked_issues"]:
+                    result["context_availability"]["available"].append("linked_issues")
+
+            result["context_availability"]["confidence_hint"] = (
+                "high" if result["pull_request"] else "medium"
+            )
+
+        except Exception as e:
+            result["context_availability"]["missing"].append("pull_request")
+            result["context_availability"]["suggestions"].append(
+                f"Could not fetch GitHub context: {e}"
+            )
     else:
-        # No GitHub remote - fall back to basic blame
-        blame_result = await _blame_with_context(
-            repo_path=repo_path,
-            file_path=file_path,
-            start_line=line_start,
-            end_line=line_end,
+        # No GitHub remote
+        result["source"] = "local_only"
+        result["context_availability"]["missing"].extend(["pull_request", "linked_issues"])
+        result["context_availability"]["suggestions"].append(
+            "Add a GitHub remote for full PR/issue context"
         )
-        blame_result["source"] = "local_only"
-        blame_result["note"] = (
-            "Local repo without GitHub remote. Add a GitHub remote for full PR/issue context."
-        )
-        return blame_result
+
+    return result
 
 
 # GitHub API tool implementations
