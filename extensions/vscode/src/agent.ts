@@ -307,7 +307,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             if (phase === 'synthesize') {
                 if (textContent && textContent.type === 'text') {
                     finalResponse = textContent.text;
-                    console.log(`[CTM Agent] ✓ Synthesis complete: ${finalResponse.length} chars`);
+                    console.log(`[CTM Agent] Synthesis complete: ${finalResponse.length} chars`);
 
                     this.reportProgress({
                         phase: 'complete',
@@ -321,7 +321,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
 
                 // If it tried to use tools in synthesis, just ask again
                 if (toolUses.length > 0) {
-                    console.log(`[CTM Agent] ⚠️ Ignoring tool calls in synthesis phase`);
+                    console.log(`[CTM Agent] Ignoring tool calls in synthesis phase`);
                     continue;
                 }
             }
@@ -368,7 +368,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             if (phase === 'investigate' && toolUses.length === 0) {
                 if (textContent && textContent.type === 'text') {
                     finalResponse = textContent.text;
-                    console.log(`[CTM Agent] ✓ Natural completion: ${finalResponse.length} chars`);
+                    console.log(`[CTM Agent] Natural completion: ${finalResponse.length} chars`);
 
                     this.reportProgress({
                         phase: 'complete',
