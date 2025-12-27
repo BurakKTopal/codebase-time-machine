@@ -1164,8 +1164,20 @@ async def _list_branches(repo_path: str, include_remote: bool = False) -> dict[s
 
 async def _get_commit(repo_path: str, sha: str) -> dict[str, Any]:
     """Get commit details."""
+    from ctm_mcp_server.utils import detect_github_remote
+
     repo = GitRepo(repo_path)
     commit = repo.get_commit(sha)
+
+    # Detect GitHub remote for constructing commit URL
+    github_info = detect_github_remote(repo)
+    html_url = None
+    pr_url = None
+    if github_info:
+        owner, repo_name = github_info
+        html_url = f"https://github.com/{owner}/{repo_name}/commit/{commit.sha}"
+        if commit.pr_number:
+            pr_url = f"https://github.com/{owner}/{repo_name}/pull/{commit.pr_number}"
 
     return {
         "success": True,
@@ -1190,6 +1202,8 @@ async def _get_commit(repo_path: str, sha: str) -> dict[str, Any]:
             ],
             "pr_number": commit.pr_number,
             "issue_numbers": commit.issue_numbers,
+            "html_url": html_url,
+            "pr_url": pr_url,
         },
     }
 
@@ -1302,7 +1316,16 @@ async def _pickaxe_search(
     are stripped from the search string to find the true introduction even if
     comment style changed over time.
     """
+    from ctm_mcp_server.utils import detect_github_remote
+
     repo = GitRepo(repo_path)
+
+    # Detect GitHub remote for constructing commit URLs
+    github_info = detect_github_remote(repo)
+    github_base_url = None
+    if github_info:
+        owner, repo_name = github_info
+        github_base_url = f"https://github.com/{owner}/{repo_name}"
 
     # Try with original string first
     original_search = search_string
@@ -1339,19 +1362,23 @@ async def _pickaxe_search(
     # Format commits for output
     formatted_commits = []
     for commit in commits:
-        formatted_commits.append(
-            {
-                "sha": commit.sha,
-                "short_sha": commit.short_sha,
-                "author": commit.author.name,
-                "date": commit.committed_date.isoformat(),
-                "message": commit.subject,
-                "full_message": commit.message,
-                "pr_number": commit.pr_number,
-                "issue_numbers": commit.issue_numbers,
-                "files_changed": len(commit.files_changed),
-            }
-        )
+        commit_data = {
+            "sha": commit.sha,
+            "short_sha": commit.short_sha,
+            "author": commit.author.name,
+            "date": commit.committed_date.isoformat(),
+            "message": commit.subject,
+            "full_message": commit.message,
+            "pr_number": commit.pr_number,
+            "issue_numbers": commit.issue_numbers,
+            "files_changed": len(commit.files_changed),
+        }
+        # Add GitHub URL if available
+        if github_base_url:
+            commit_data["html_url"] = f"{github_base_url}/commit/{commit.sha}"
+            if commit.pr_number:
+                commit_data["pr_url"] = f"{github_base_url}/pull/{commit.pr_number}"
+        formatted_commits.append(commit_data)
 
     # Identify the "introduction" commit (last one in the list = oldest = when code was first added)
     introduction_commit = formatted_commits[-1] if formatted_commits else None
@@ -1366,6 +1393,12 @@ async def _pickaxe_search(
         "introduction_commit": introduction_commit,
         "note": "The 'introduction_commit' is the oldest commit that added/removed this code (likely when it was first introduced). Commits are ordered newest to oldest. When file_path is provided, file renames are followed by default to find the true origin.",
     }
+
+    # Add GitHub info if available
+    if github_info:
+        result["github_owner"] = github_info[0]
+        result["github_repo"] = github_info[1]
+        result["github_base_url"] = github_base_url
 
     # Add info about stripped search if it was used
     if stripped_search and search_string == stripped_search:
@@ -1673,10 +1706,28 @@ async def _get_local_line_context(
             "line_range": [line_start, line_end],
         }
 
-    # Get the primary blame commit (most common commit for the requested lines)
+    # Collect ALL unique blame commits for the requested lines
+    commit_info: dict[str, dict[str, Any]] = {}
     commit_counts: dict[str, int] = {}
+    commit_lines: dict[str, list[int]] = {}  # Track which lines each commit modified
+
     for line in blame_result.lines:
-        commit_counts[line.commit_sha] = commit_counts.get(line.commit_sha, 0) + 1
+        sha = line.commit_sha
+        commit_counts[sha] = commit_counts.get(sha, 0) + 1
+        if sha not in commit_lines:
+            commit_lines[sha] = []
+        commit_lines[sha].append(line.line_number)
+
+        if sha not in commit_info:
+            commit_info[sha] = {
+                "sha": sha,
+                "message": line.commit_message,
+                "author": line.author.name,
+                "date": line.committed_date.isoformat(),
+                "message_signals": _extract_message_signals(line.commit_message),
+                "pr_number": line.pr_number,
+                "issue_numbers": line.issue_numbers,
+            }
 
     if not commit_counts:
         return {
@@ -1690,24 +1741,97 @@ async def _get_local_line_context(
     primary_sha = max(commit_counts, key=commit_counts.get)  # type: ignore
     primary_line = next(l for l in blame_result.lines if l.commit_sha == primary_sha)
 
+    # Build blame_commits array with ALL unique commits, ordered by line count
+    blame_commits_list = []
+    for sha in sorted(commit_counts.keys(), key=lambda s: commit_counts[s], reverse=True):
+        info = commit_info[sha].copy()
+        info["line_count"] = commit_counts[sha]
+        info["lines"] = commit_lines[sha]
+        blame_commits_list.append(info)
+
     # Get current content
     current_content = "\n".join(line.content for line in blame_result.lines)
+
+    # Build GitHub URLs if available
+    github_base_url = None
+    if github_info:
+        owner, repo_name = github_info
+        github_base_url = f"https://github.com/{owner}/{repo_name}"
+
+    # Add URLs to blame commits
+    for bc in blame_commits_list:
+        if github_base_url:
+            bc["html_url"] = f"{github_base_url}/commit/{bc['sha']}"
+            if bc.get("pr_number"):
+                bc["pr_url"] = f"{github_base_url}/pull/{bc['pr_number']}"
+
+    # Build code_sections: group consecutive lines by their origin commit
+    # This provides a pre-analyzed breakdown for the agent
+    code_sections: list[dict[str, Any]] = []
+    if blame_result.lines:
+        current_section: dict[str, Any] | None = None
+
+        for line in blame_result.lines:
+            sha = line.commit_sha
+            if current_section is None or current_section["commit_sha"] != sha:
+                # Start new section
+                if current_section is not None:
+                    code_sections.append(current_section)
+
+                # Get commit info for this section
+                ci = commit_info.get(sha, {})
+                current_section = {
+                    "lines": [line.line_number],
+                    "line_start": line.line_number,
+                    "line_end": line.line_number,
+                    "content": [line.content],
+                    "commit_sha": sha,
+                    "commit_short_sha": sha[:7],
+                    "author": ci.get("author", line.author.name),
+                    "date": ci.get("date", line.committed_date.isoformat()),
+                    "message": ci.get("message", line.commit_message),
+                    "pr_number": ci.get("pr_number"),
+                    "html_url": f"{github_base_url}/commit/{sha}" if github_base_url else None,
+                    "pr_url": f"{github_base_url}/pull/{ci.get('pr_number')}" if github_base_url and ci.get("pr_number") else None,
+                }
+            else:
+                # Extend current section
+                current_section["lines"].append(line.line_number)
+                current_section["line_end"] = line.line_number
+                current_section["content"].append(line.content)
+
+        # Don't forget the last section
+        if current_section is not None:
+            code_sections.append(current_section)
+
+        # Convert content arrays to strings
+        for section in code_sections:
+            section["content"] = "\n".join(section["content"])
+            section["line_range"] = f"{section['line_start']}-{section['line_end']}" if section["line_start"] != section["line_end"] else str(section["line_start"])
 
     # Build result with accurate local blame
     result: dict[str, Any] = {
         "file_path": file_path,
         "line_range": [line_start, line_end],
         "current_content": current_content,
+        # Primary blame commit (backwards compatible)
         "blame_commit": {
             "sha": primary_sha,
             "message": primary_line.commit_message,
             "author": primary_line.author.name,
             "date": primary_line.committed_date.isoformat(),
             "message_signals": _extract_message_signals(primary_line.commit_message),
+            "html_url": f"{github_base_url}/commit/{primary_sha}" if github_base_url else None,
         },
+        # ALL blame commits for multi-line selections
+        "blame_commits": blame_commits_list,
+        # Pre-analyzed code sections grouped by origin commit
+        # Each section contains consecutive lines from the same commit
+        "code_sections": code_sections,
         "historical_commits": [],
         "pull_request": None,
         "linked_issues": [],
+        "github_remote": {"owner": github_info[0], "repo": github_info[1]} if github_info else None,
         "context_availability": {
             "available": ["file_content", "commit"],
             "missing": [],
@@ -1715,6 +1839,12 @@ async def _get_local_line_context(
             "suggestions": [],
         },
     }
+
+    # Add note if multiple commits touch the selected lines
+    if len(blame_commits_list) > 1:
+        result["context_availability"]["suggestions"].append(
+            f"Note: {len(blame_commits_list)} different commits modified the selected lines"
+        )
 
     # Get historical commits if requested (using pickaxe with --follow for accuracy)
     if history_depth > 1:
@@ -2130,9 +2260,36 @@ async def _get_issue(owner: str, repo: str, issue_number: int) -> dict[str, Any]
 
 
 async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, Any]:
-    """Search for PRs containing a commit via GitHub API."""
+    """Search for PRs containing a commit via GitHub API.
+
+    Returns both PR numbers and basic details (title, state, author) for each PR found.
+    """
     client = GitHubClient(owner=owner, repo=repo, cache=_cache)
     pr_numbers = await client.search_prs_for_commit(sha)
+
+    # Fetch basic details for each PR found
+    prs_with_details = []
+    for pr_num in pr_numbers[:5]:  # Limit to first 5 PRs to avoid too many API calls
+        try:
+            pr_detail = await client.get_pull_request(pr_num)
+            prs_with_details.append({
+                "number": pr_num,
+                "title": pr_detail.title,
+                "state": pr_detail.state,
+                "author": pr_detail.user.login if pr_detail.user else None,
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
+                "merged_at": pr_detail.merged_at.isoformat() if pr_detail.merged_at else None,
+                "body": _truncate(pr_detail.body or "", 300),
+            })
+        except Exception:
+            # If we can't get details, include just the number
+            prs_with_details.append({
+                "number": pr_num,
+                "title": None,
+                "state": None,
+                "author": None,
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
+            })
 
     return {
         "success": True,
@@ -2140,6 +2297,7 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
         "repo": repo,
         "sha": sha,
         "pr_numbers": pr_numbers,
+        "prs": prs_with_details,  # NEW: Include full PR details
         "total_found": len(pr_numbers),
     }
 

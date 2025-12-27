@@ -422,10 +422,29 @@ export class ContextPanel {
         <p><strong>Lines:</strong> ${context.line_range || `${context.line_start || '?'}-${context.line_end || '?'}`}</p>
     </div>
 
-    ${context.blame_commit ? `
+    ${context.blame_commits && context.blame_commits.length > 1 ? `
+    <div class="section commit">
+        <h2>Commits (${context.blame_commits.length} commits touch selected lines)</h2>
+        ${context.blame_commits.map((bc: any) => `
+        <div class="blame-commit">
+            <p><strong>Commit:</strong> ${bc.html_url
+                ? `<a href="${bc.html_url}"><code>${bc.sha ? bc.sha.slice(0, 7) : 'unknown'}</code></a>`
+                : `<code>${bc.sha ? bc.sha.slice(0, 7) : 'unknown'}</code>`
+            }</p>
+            <p><strong>Author:</strong> ${this.escapeHtml(bc.author || 'unknown')}</p>
+            <p><strong>Date:</strong> ${bc.date || 'unknown'}</p>
+            <p><strong>Message:</strong> ${this.escapeHtml(bc.message || '')}</p>
+            ${bc.lines ? `<p class="metadata">Lines: ${bc.lines.join(', ')}</p>` : ''}
+        </div>
+        `).join('<hr style="margin: 10px 0; border: none; border-top: 1px solid var(--vscode-panel-border);">')}
+    </div>
+    ` : context.blame_commit ? `
     <div class="section commit">
         <h2>Last Modified</h2>
-        <p><strong>Commit:</strong> <code>${context.blame_commit.sha ? context.blame_commit.sha.slice(0, 7) : 'unknown'}</code></p>
+        <p><strong>Commit:</strong> ${context.blame_commit.html_url
+            ? `<a href="${context.blame_commit.html_url}"><code>${context.blame_commit.sha ? context.blame_commit.sha.slice(0, 7) : 'unknown'}</code></a>`
+            : `<code>${context.blame_commit.sha ? context.blame_commit.sha.slice(0, 7) : 'unknown'}</code>`
+        }</p>
         <p><strong>Author:</strong> ${this.escapeHtml(context.blame_commit.author || 'unknown')}</p>
         <p><strong>Date:</strong> ${context.blame_commit.date || 'unknown'}</p>
         <p><strong>Message:</strong> ${this.escapeHtml(context.blame_commit.message || '')}</p>
@@ -434,11 +453,16 @@ export class ContextPanel {
 
     ${context.pull_request && context.pull_request.number ? `
     <div class="section pr">
-        <h2>Pull Request #${context.pull_request.number}</h2>
-        <p><strong>${this.escapeHtml(context.pull_request.title || 'Untitled')}</strong></p>
+        <h2>${context.pull_request.html_url
+            ? `<a href="${context.pull_request.html_url}">Pull Request #${context.pull_request.number}</a>`
+            : `Pull Request #${context.pull_request.number}`
+        }</h2>
+        <p><strong>${context.pull_request.html_url
+            ? `<a href="${context.pull_request.html_url}">${this.escapeHtml(context.pull_request.title || 'Untitled')}</a>`
+            : this.escapeHtml(context.pull_request.title || 'Untitled')
+        }</strong></p>
         ${context.pull_request.author ? `<p class="metadata">By: ${this.escapeHtml(context.pull_request.author)}</p>` : ''}
         ${context.pull_request.body ? `<p>${this.escapeHtml(context.pull_request.body.slice(0, 300))}${context.pull_request.body.length > 300 ? '...' : ''}</p>` : ''}
-        ${context.pull_request.html_url ? `<p><a href="${context.pull_request.html_url}">View on GitHub</a></p>` : ''}
         <p class="metadata">State: ${context.pull_request.state ?
             (context.pull_request.state === 'merged' ? `✓ Merged${context.pull_request.merged_at ? ' on ' + new Date(context.pull_request.merged_at).toLocaleDateString() : ''}` :
              context.pull_request.state === 'closed' ? '✗ Closed (not merged)' :
@@ -450,11 +474,16 @@ export class ContextPanel {
 
     ${context.linked_issues && context.linked_issues.length > 0 ? context.linked_issues.filter((issue: any) => issue && issue.number).map((issue: any) => `
     <div class="section issue">
-        <h2>Issue #${issue.number}</h2>
-        <p><strong>${this.escapeHtml(issue.title || 'Untitled')}</strong></p>
+        <h2>${issue.html_url
+            ? `<a href="${issue.html_url}">Issue #${issue.number}</a>`
+            : `Issue #${issue.number}`
+        }</h2>
+        <p><strong>${issue.html_url
+            ? `<a href="${issue.html_url}">${this.escapeHtml(issue.title || 'Untitled')}</a>`
+            : this.escapeHtml(issue.title || 'Untitled')
+        }</strong></p>
         ${issue.author ? `<p class="metadata">By: ${this.escapeHtml(issue.author)}</p>` : ''}
         ${issue.body ? `<p>${this.escapeHtml(issue.body.slice(0, 300))}${issue.body.length > 300 ? '...' : ''}</p>` : ''}
-        ${issue.html_url ? `<p><a href="${issue.html_url}">View on GitHub</a></p>` : ''}
         <p class="metadata">State: ${issue.state ?
             (issue.state === 'closed' ? '✓ Closed' :
              issue.state === 'open' ? '○ Open' :

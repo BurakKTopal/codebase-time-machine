@@ -93,12 +93,112 @@ export class FactStore {
 
         // Handle get_local_line_context / get_line_context
         if (toolName === 'get_local_line_context' || toolName === 'get_line_context') {
-            // Blame commit - INCLUDE SHA so agent can reference it
-            if (result.blame_commit) {
+            // Get GitHub base URL for constructing links
+            const githubBaseUrl = result.github_remote
+                ? `https://github.com/${result.github_remote.owner}/${result.github_remote.repo}`
+                : null;
+
+            // Handle pre-analyzed code_sections (preferred - gives structured breakdown)
+            // NOTE: code_sections shows LAST TOUCH commits, NOT when code was originally introduced
+            if (result.code_sections && result.code_sections.length > 0) {
+                // Add a structured overview for the agent with clear "last touched" labeling
+                if (result.code_sections.length > 1) {
+                    const overview = result.code_sections.map((section: any) => {
+                        const commitRef = section.html_url
+                            ? `[${section.commit_short_sha}](${section.html_url})`
+                            : section.commit_short_sha;
+                        const prRef = section.pr_url && section.pr_number
+                            ? ` via [PR #${section.pr_number}](${section.pr_url})`
+                            : section.pr_number ? ` via PR #${section.pr_number}` : '';
+                        return `• Lines ${section.line_range}: LAST TOUCHED by ${commitRef} (${section.author}, ${section.date?.substring(0, 10)})${prRef}`;
+                    }).join('\n');
+
+                    facts.push({
+                        id: 'code_sections_overview',
+                        text: `CODE SECTIONS BREAKDOWN (⚠️ shows LAST TOUCH, not origin - use pickaxe_search for true origin):\n${overview}`,
+                        source: toolName,
+                        category: 'other'
+                    });
+
+                    // Add a warning about blame vs origin
+                    facts.push({
+                        id: 'blame_origin_warning',
+                        text: `⚠️ WARNING: The commits above show who LAST TOUCHED each line, NOT when code was originally introduced. For true origin, use pickaxe_search with distinctive code strings.`,
+                        source: toolName,
+                        category: 'other'
+                    });
+                }
+
+                // Add detailed facts for each section with clear "last touched" labeling
+                const seenPRs = new Set<number>();
+                result.code_sections.forEach((section: any, idx: number) => {
+                    const commitRef = section.html_url
+                        ? `[${section.commit_short_sha}](${section.html_url})`
+                        : section.commit_short_sha;
+                    const prRef = section.pr_url && section.pr_number
+                        ? ` (via [PR #${section.pr_number}](${section.pr_url}))`
+                        : section.pr_number ? ` (via PR #${section.pr_number})` : '';
+
+                    facts.push({
+                        id: `section_${idx}_${section.commit_short_sha}`,
+                        text: `Section ${idx + 1} (lines ${section.line_range}): LAST TOUCHED by ${commitRef} (${section.author}, ${section.date?.substring(0, 10)}) - "${section.message?.split('\n')[0]?.substring(0, 60)}"${prRef}`,
+                        source: toolName,
+                        category: 'commit'
+                    });
+
+                    // Also create PR facts for PRs found in sections (for UI display)
+                    if (section.pr_number && !seenPRs.has(section.pr_number)) {
+                        seenPRs.add(section.pr_number);
+                        const prUrl = section.pr_url || (githubBaseUrl ? `${githubBaseUrl}/pull/${section.pr_number}` : null);
+                        const prRefLink = prUrl ? `[PR #${section.pr_number}](${prUrl})` : `PR #${section.pr_number}`;
+                        facts.push({
+                            id: `pr_${section.pr_number}`,
+                            text: `${prRefLink}: "${section.message?.split('\n')[0]?.substring(0, 80) || 'Untitled'}" by ${section.author} (from code section lines ${section.line_range})`,
+                            source: toolName,
+                            category: 'pr'
+                        });
+                    }
+                });
+            } else if (result.blame_commits && result.blame_commits.length > 0) {
+                // Fallback to blame_commits if code_sections not available
+                // NOTE: These are LAST TOUCH commits, not necessarily the origin
+                result.blame_commits.forEach((bc: any, idx: number) => {
+                    const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
+                    const commitRef = commitUrl
+                        ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
+                        : bc.sha?.substring(0, 8);
+                    const prRef = bc.pr_url && bc.pr_number
+                        ? ` (via [PR #${bc.pr_number}](${bc.pr_url}))`
+                        : bc.pr_number ? ` (via PR #${bc.pr_number})` : '';
+                    const linesInfo = bc.lines ? ` [lines: ${bc.lines.join(', ')}]` : '';
+
+                    facts.push({
+                        id: `blame_${bc.sha?.substring(0, 8)}`,
+                        text: `LAST TOUCHED by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"${prRef}${linesInfo}`,
+                        source: toolName,
+                        category: 'commit'
+                    });
+                });
+
+                if (result.blame_commits.length > 1) {
+                    facts.push({
+                        id: 'blame_multi_commit_note',
+                        text: `Note: ${result.blame_commits.length} different commits LAST TOUCHED the selected lines (⚠️ use pickaxe_search for true origin)`,
+                        source: toolName,
+                        category: 'other'
+                    });
+                }
+            } else if (result.blame_commit) {
+                // Fallback to single blame_commit for backwards compatibility
+                // NOTE: This is the LAST TOUCH commit, not necessarily the origin
                 const bc = result.blame_commit;
+                const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
+                const commitRef = commitUrl
+                    ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
+                    : bc.sha?.substring(0, 8);
                 facts.push({
                     id: `blame_${bc.sha?.substring(0, 8)}`,
-                    text: `Blame commit ${bc.sha}: by ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"`,
+                    text: `LAST TOUCHED by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}" (⚠️ may not be origin - use pickaxe_search to verify)`,
                     source: toolName,
                     category: 'commit'
                 });
@@ -107,18 +207,20 @@ export class FactStore {
             // PR
             if (result.pull_request) {
                 const pr = result.pull_request;
+                const prUrl = pr.html_url || (githubBaseUrl ? `${githubBaseUrl}/pull/${pr.number}` : null);
+                const prRef = prUrl ? `[PR #${pr.number}](${prUrl})` : `PR #${pr.number}`;
                 // Include state in the fact text so it can be parsed by buildRawContextFromFacts
                 const stateStr = pr.state ? ` (${pr.state})` : '';
                 facts.push({
                     id: `pr_${pr.number}`,
-                    text: `PR #${pr.number}: "${pr.title || 'Untitled'}" by ${pr.author}${stateStr}`,
+                    text: `${prRef}: "${pr.title || 'Untitled'}" by ${pr.author}${stateStr}`,
                     source: toolName,
                     category: 'pr'
                 });
                 if (pr.body && pr.body.length > 50) {
                     facts.push({
                         id: `pr_${pr.number}_reason`,
-                        text: `PR #${pr.number} reason: ${pr.body.substring(0, 200)}...`,
+                        text: `${prRef} reason: ${pr.body.substring(0, 200)}...`,
                         source: toolName,
                         category: 'pr'
                     });
@@ -128,18 +230,20 @@ export class FactStore {
             // Linked issues
             if (result.linked_issues && result.linked_issues.length > 0) {
                 result.linked_issues.forEach((issue: any) => {
+                    const issueUrl = issue.html_url || (githubBaseUrl ? `${githubBaseUrl}/issues/${issue.number}` : null);
+                    const issueRef = issueUrl ? `[Issue #${issue.number}](${issueUrl})` : `Issue #${issue.number}`;
                     // Include state in the fact text so it can be parsed by buildRawContextFromFacts
                     const stateStr = issue.state ? ` (${issue.state})` : '';
                     facts.push({
                         id: `issue_${issue.number}`,
-                        text: `Issue #${issue.number}: "${issue.title || 'Untitled'}"${stateStr}`,
+                        text: `${issueRef}: "${issue.title || 'Untitled'}"${stateStr}`,
                         source: toolName,
                         category: 'issue'
                     });
                     if (issue.body && issue.body.length > 50) {
                         facts.push({
                             id: `issue_${issue.number}_desc`,
-                            text: `Issue #${issue.number} problem: ${issue.body.substring(0, 150)}...`,
+                            text: `${issueRef} problem: ${issue.body.substring(0, 150)}...`,
                             source: toolName,
                             category: 'issue'
                         });
@@ -152,9 +256,13 @@ export class FactStore {
                 // Store all historical commit SHAs so agent can reference them
                 result.historical_commits.forEach((commit: any, idx: number) => {
                     if (commit.sha) {
+                        const commitUrl = githubBaseUrl ? `${githubBaseUrl}/commit/${commit.sha}` : null;
+                        const commitRef = commitUrl
+                            ? `[${commit.sha?.substring(0, 8)}](${commitUrl})`
+                            : commit.sha?.substring(0, 8);
                         facts.push({
                             id: `history_${commit.sha?.substring(0, 8)}`,
-                            text: `Historical commit ${commit.sha}: by ${commit.author} on ${commit.date?.substring(0, 10)} - "${commit.message?.split('\n')[0]?.substring(0, 60)}"`,
+                            text: `Historical commit ${commitRef}: by ${commit.author} on ${commit.date?.substring(0, 10)} - "${commit.message?.split('\n')[0]?.substring(0, 60)}"`,
                             source: toolName,
                             category: 'commit'
                         });
@@ -165,9 +273,13 @@ export class FactStore {
                 // True origin requires pickaxe_search - don't mislabel as ORIGIN
                 const oldestSeen = result.historical_commits[result.historical_commits.length - 1];
                 if (oldestSeen) {
+                    const oldestUrl = githubBaseUrl ? `${githubBaseUrl}/commit/${oldestSeen.sha}` : null;
+                    const oldestRef = oldestUrl
+                        ? `[${oldestSeen.sha?.substring(0, 8)}](${oldestUrl})`
+                        : oldestSeen.sha?.substring(0, 8);
                     facts.push({
                         id: `oldest_seen_${oldestSeen.sha?.substring(0, 8)}`,
-                        text: `Oldest commit in view ${oldestSeen.sha}: by ${oldestSeen.author} on ${oldestSeen.date?.substring(0, 10)} (use pickaxe_search for true origin)`,
+                        text: `Oldest commit in view ${oldestRef}: by ${oldestSeen.author} on ${oldestSeen.date?.substring(0, 10)} (use pickaxe_search for true origin)`,
                         source: toolName,
                         category: 'commit'
                     });
@@ -178,16 +290,18 @@ export class FactStore {
         // Handle get_pr - data is nested under result.pr
         if (toolName === 'get_pr') {
             const pr = result.pr || result;
+            const prUrl = pr.html_url;
+            const prRef = prUrl ? `[PR #${pr.number}](${prUrl})` : `PR #${pr.number}`;
             facts.push({
                 id: `pr_${pr.number}`,
-                text: `PR #${pr.number}: "${pr.title}" by ${pr.author} (${pr.state})`,
+                text: `${prRef}: "${pr.title}" by ${pr.author} (${pr.state})`,
                 source: toolName,
                 category: 'pr'
             });
             if (pr.body) {
                 facts.push({
                     id: `pr_${pr.number}_body`,
-                    text: `PR #${pr.number} description: ${pr.body.substring(0, 300)}...`,
+                    text: `${prRef} description: ${pr.body.substring(0, 300)}...`,
                     source: toolName,
                     category: 'pr'
                 });
@@ -197,7 +311,7 @@ export class FactStore {
                 if (keyComment) {
                     facts.push({
                         id: `pr_${pr.number}_discussion`,
-                        text: `PR discussion: @${keyComment.author}: "${keyComment.body.substring(0, 150)}..."`,
+                        text: `${prRef} discussion: @${keyComment.author}: "${keyComment.body.substring(0, 150)}..."`,
                         source: toolName,
                         category: 'pr'
                     });
@@ -208,16 +322,18 @@ export class FactStore {
         // Handle get_issue - data is nested under result.issue
         if (toolName === 'get_issue') {
             const issue = result.issue || result;
+            const issueUrl = issue.html_url;
+            const issueRef = issueUrl ? `[Issue #${issue.number}](${issueUrl})` : `Issue #${issue.number}`;
             facts.push({
                 id: `issue_${issue.number}`,
-                text: `Issue #${issue.number}: "${issue.title}" by ${issue.author} (${issue.state})`,
+                text: `${issueRef}: "${issue.title}" by ${issue.author} (${issue.state})`,
                 source: toolName,
                 category: 'issue'
             });
             if (issue.body) {
                 facts.push({
                     id: `issue_${issue.number}_body`,
-                    text: `Issue #${issue.number} problem: ${issue.body.substring(0, 300)}...`,
+                    text: `${issueRef} problem: ${issue.body.substring(0, 300)}...`,
                     source: toolName,
                     category: 'issue'
                 });
@@ -227,42 +343,78 @@ export class FactStore {
         // Handle get_commit / get_github_commit - INCLUDE FULL SHA
         if (toolName === 'get_commit' || toolName === 'get_github_commit') {
             const commit = result.commit || result;
+            const commitUrl = commit.html_url;
+            const commitRef = commitUrl
+                ? `[${commit.sha?.substring(0, 8)}](${commitUrl})`
+                : commit.sha?.substring(0, 8);
             facts.push({
                 id: `commit_${commit.sha?.substring(0, 8)}`,
-                text: `Commit ${commit.sha}: by ${commit.author?.name || commit.author} on ${commit.authored_date?.substring(0, 10) || commit.date?.substring(0, 10)} - "${commit.message?.split('\n')[0]?.substring(0, 80)}"`,
+                text: `Commit ${commitRef}: by ${commit.author?.name || commit.author} on ${commit.authored_date?.substring(0, 10) || commit.date?.substring(0, 10)} - "${commit.message?.split('\n')[0]?.substring(0, 80)}"`,
                 source: toolName,
                 category: 'commit'
             });
             // Also store PR number if present
             if (commit.pr_number) {
+                // Construct PR URL from commit URL if available
+                const prUrl = commitUrl ? commitUrl.replace(/\/commit\/[^/]+$/, `/pull/${commit.pr_number}`) : null;
+                const prRef = prUrl ? `[PR #${commit.pr_number}](${prUrl})` : `PR #${commit.pr_number}`;
                 facts.push({
                     id: `commit_pr_${commit.pr_number}`,
-                    text: `Commit ${commit.sha?.substring(0, 8)} is from PR #${commit.pr_number}`,
+                    text: `Commit ${commitRef} is from ${prRef}`,
                     source: toolName,
                     category: 'pr'
                 });
             }
         }
 
-        // Handle search_prs_for_commit - returns pr_numbers array of integers
+        // Handle search_prs_for_commit - returns prs array with full details
         if (toolName === 'search_prs_for_commit') {
+            const prs = result.prs || [];
             const prNumbers = result.pr_numbers || [];
-            if (prNumbers.length > 0) {
-                // Record that we found PRs for this commit
+
+            if (prs.length > 0) {
+                // Extract full PR details with hyperlinks
+                // Only create full PR facts if we have actual title/state info
+                prs.forEach((pr: any) => {
+                    const prRef = pr.html_url
+                        ? `[PR #${pr.number}](${pr.html_url})`
+                        : `PR #${pr.number}`;
+
+                    // If PR has actual details (title not null), create full fact
+                    if (pr.title) {
+                        const stateStr = pr.state ? ` (${pr.state})` : '';
+                        facts.push({
+                            id: `pr_${pr.number}`,
+                            text: `${prRef}: "${pr.title}" by ${pr.author || 'unknown'}${stateStr}`,
+                            source: toolName,
+                            category: 'pr'
+                        });
+                        if (pr.body && pr.body.length > 20) {
+                            facts.push({
+                                id: `pr_${pr.number}_body`,
+                                text: `${prRef} description: ${pr.body.substring(0, 200)}...`,
+                                source: toolName,
+                                category: 'pr'
+                            });
+                        }
+                    } else {
+                        // PR has incomplete data - just note its existence, don't create pr_XXX fact
+                        // This prevents incomplete PRs from being picked up by buildRawContextFromFacts
+                        facts.push({
+                            id: `pr_ref_${pr.number}`,
+                            text: `Found ${prRef} (details not available - use get_pr for full info)`,
+                            source: toolName,
+                            category: 'other'  // Use 'other' instead of 'pr' to avoid UI picking it up
+                        });
+                    }
+                });
+            } else if (prNumbers.length > 0) {
+                // Fallback to just PR numbers if full details not available
                 facts.push({
                     id: `search_prs_${result.sha?.substring(0, 8)}`,
-                    text: `Commit ${result.sha?.substring(0, 8)} is associated with PR(s): ${prNumbers.map((n: number) => `#${n}`).join(', ')}`,
+                    text: `Commit ${result.sha?.substring(0, 8)} is associated with PR(s): ${prNumbers.map((n: number) => `#${n}`).join(', ')} (use get_pr for details)`,
                     source: toolName,
-                    category: 'pr'
-                });
-                // Also record individual PR numbers for reference
-                prNumbers.forEach((prNum: number) => {
-                    facts.push({
-                        id: `pr_found_${prNum}`,
-                        text: `Found PR #${prNum} associated with commit ${result.sha?.substring(0, 8)}`,
-                        source: toolName,
-                        category: 'pr'
-                    });
+                    category: 'other'  // Use 'other' to avoid incomplete PRs in UI
                 });
             }
         }
@@ -292,9 +444,17 @@ export class FactStore {
         if (toolName === 'pickaxe_search') {
             if (result.commits && result.commits.length > 0) {
                 result.commits.forEach((c: any) => {
+                    // Format commit with hyperlink if URL available
+                    const commitRef = c.html_url
+                        ? `[${c.sha?.substring(0, 8)}](${c.html_url})`
+                        : c.sha?.substring(0, 8);
+                    const prRef = c.pr_url && c.pr_number
+                        ? ` (via [PR #${c.pr_number}](${c.pr_url}))`
+                        : c.pr_number ? ` (via PR #${c.pr_number})` : '';
+
                     facts.push({
                         id: `pickaxe_${c.sha?.substring(0, 8)}`,
-                        text: `Pickaxe found commit ${c.sha}: by ${c.author} on ${c.date?.substring(0, 10)} - "${c.message?.split('\n')[0]?.substring(0, 80)}"`,
+                        text: `Pickaxe found commit ${commitRef}: by ${c.author} on ${c.date?.substring(0, 10)} - "${c.message?.split('\n')[0]?.substring(0, 80)}"${prRef}`,
                         source: toolName,
                         category: 'commit'
                     });
@@ -303,9 +463,16 @@ export class FactStore {
                 // Use introduction_commit (oldest = true origin), NOT commits[0] (newest)
                 // The MCP server returns commits newest→oldest, with introduction_commit being the oldest
                 const origin = result.introduction_commit || result.commits[result.commits.length - 1];
+                const originRef = origin.html_url
+                    ? `[${origin.sha?.substring(0, 8)}](${origin.html_url})`
+                    : origin.sha?.substring(0, 8);
+                const originPrRef = origin.pr_url && origin.pr_number
+                    ? ` (via [PR #${origin.pr_number}](${origin.pr_url}))`
+                    : origin.pr_number ? ` (via PR #${origin.pr_number})` : '';
+
                 facts.push({
                     id: `pickaxe_origin`,
-                    text: `ORIGIN: Code "${result.search_string || 'pattern'}" first added in commit ${origin.sha} by ${origin.author} on ${origin.date?.substring(0, 10)}`,
+                    text: `ORIGIN: Code "${result.search_string || 'pattern'}" first added in commit ${originRef} by ${origin.author} on ${origin.date?.substring(0, 10)}${originPrRef}`,
                     source: toolName,
                     category: 'commit'
                 });
@@ -313,7 +480,7 @@ export class FactStore {
                 // Also store as proper origin fact for buildRawContextFromFacts
                 facts.push({
                     id: `origin_${origin.sha?.substring(0, 8)}`,
-                    text: `ORIGIN commit ${origin.sha}: Code first added by ${origin.author} on ${origin.date?.substring(0, 10)}`,
+                    text: `ORIGIN commit ${originRef}: Code first added by ${origin.author} on ${origin.date?.substring(0, 10)}${originPrRef}`,
                     source: toolName,
                     category: 'commit'
                 });
@@ -321,6 +488,55 @@ export class FactStore {
                 facts.push({
                     id: 'pickaxe_no_results',
                     text: `Pickaxe search for "${result.search_string || 'pattern'}" found no commits`,
+                    source: toolName,
+                    category: 'other'
+                });
+            }
+        }
+
+        // Handle get_code_owners - who knows this code best
+        if (toolName === 'get_code_owners') {
+            if (result.owners && result.owners.length > 0) {
+                // Summary of top contributors
+                const topOwners = result.owners.slice(0, 3);
+                const ownersSummary = topOwners.map((o: any) =>
+                    `${o.name} (${o.commits} commits, ${o.commit_percentage}%, last: ${o.last_commit_date?.substring(0, 10)})`
+                ).join('; ');
+
+                facts.push({
+                    id: `code_owners_${result.path?.replace(/[^a-z0-9]/gi, '_')}`,
+                    text: `Code owners for ${result.path}: ${ownersSummary}`,
+                    source: toolName,
+                    category: 'other'
+                });
+
+                // Primary owner with more details
+                const primary = result.owners[0];
+                facts.push({
+                    id: `primary_owner_${result.path?.replace(/[^a-z0-9]/gi, '_')}`,
+                    text: `Primary code owner: ${primary.name} (${primary.email}) with ${primary.commits} commits (${primary.commit_percentage}% ownership, score: ${primary.ownership_score})`,
+                    source: toolName,
+                    category: 'other'
+                });
+
+                // Store all owner emails as evidence for potential contact
+                result.owners.forEach((owner: any) => {
+                    if (owner.email) {
+                        facts.push({
+                            id: `owner_contact_${owner.name?.replace(/[^a-z0-9]/gi, '_')}`,
+                            text: `Contact for ${owner.name}: ${owner.email}`,
+                            source: toolName,
+                            category: 'other'
+                        });
+                    }
+                });
+            }
+
+            // Overall stats
+            if (result.total_commits_analyzed) {
+                facts.push({
+                    id: `code_owners_stats`,
+                    text: `Code ownership analysis: ${result.unique_contributors || 'unknown'} unique contributors across ${result.total_commits_analyzed} commits`,
                     source: toolName,
                     category: 'other'
                 });
@@ -623,6 +839,66 @@ export class FactStore {
                     });
                 }
             }
+        }
+
+        // Handle search_prs_for_commit - extract URL and author evidence from full PR details
+        if (toolName === 'search_prs_for_commit' && result.prs) {
+            result.prs.forEach((pr: any) => {
+                if (pr.html_url) {
+                    evidence.push({
+                        id: `url_pr_${pr.number}`,
+                        type: 'url',
+                        verbatim: pr.html_url,
+                        source: toolName
+                    });
+                }
+                if (pr.author) {
+                    evidence.push({
+                        id: `author_pr_${pr.number}`,
+                        type: 'author',
+                        verbatim: pr.author,
+                        source: toolName
+                    });
+                }
+                if (pr.merged_at) {
+                    evidence.push({
+                        id: `timestamp_pr_${pr.number}_merged`,
+                        type: 'timestamp',
+                        verbatim: pr.merged_at,
+                        source: toolName
+                    });
+                }
+            });
+        }
+
+        // Handle get_code_owners - extract emails and names as evidence
+        if (toolName === 'get_code_owners' && result.owners) {
+            result.owners.forEach((owner: any, idx: number) => {
+                if (owner.email) {
+                    evidence.push({
+                        id: `email_owner_${idx}`,
+                        type: 'email',
+                        verbatim: owner.email,
+                        source: toolName
+                    });
+                }
+                if (owner.name) {
+                    evidence.push({
+                        id: `author_owner_${idx}`,
+                        type: 'author',
+                        verbatim: owner.name,
+                        source: toolName
+                    });
+                }
+                if (owner.last_commit_date) {
+                    evidence.push({
+                        id: `timestamp_owner_${idx}`,
+                        type: 'timestamp',
+                        verbatim: owner.last_commit_date,
+                        source: toolName
+                    });
+                }
+            });
         }
 
         // Handle get_commit_diff

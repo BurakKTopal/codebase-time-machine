@@ -109,6 +109,28 @@ export class CTMAgent {
             const evidence = this.factStore.getEvidenceSummary();
             const evidenceSection = evidence ? `\n### Verbatim Evidence\n${evidence}\n` : '';
 
+            // Check if code has multiple sections from different commits
+            const hasCodeSections = facts.includes('CODE SECTIONS BREAKDOWN');
+            const sectionCount = (facts.match(/Section \d+ \(lines/g) || []).length;
+            const hasBlameWarning = facts.includes('LAST TOUCH') || facts.includes('LAST TOUCHED');
+
+            const multiSectionInstructions = hasCodeSections ? `
+**IMPORTANT: The selected code has ${sectionCount} distinct sections from different commits.**
+The "CODE SECTIONS BREAKDOWN" above shows which lines were LAST TOUCHED by which commit.
+
+⚠️ **CRITICAL DISTINCTION:**
+- The commits shown are "LAST TOUCH" commits - they may have just MOVED or REFORMATTED the code
+- For the TRUE ORIGIN of each section, you may need to use \`pickaxe_search\` with distinctive code strings
+- Example: A TODO comment by "Oliveira" might show blame to a 2025 refactor commit, but pickaxe_search reveals it was actually written in 2023
+
+**Your response MUST:**
+1. Explain EACH section separately with its line range (e.g., "Lines 227-228...")
+2. Clarify if the blame commit is the origin OR if you found an earlier origin via pickaxe
+3. Include clickable hyperlinks for EVERY commit/PR/issue you mention
+` : (hasBlameWarning ? `
+⚠️ **Note:** The blame commit shown is the "LAST TOUCH" commit. If it says "refactor", "cleanup", or similar, use \`pickaxe_search\` to find the TRUE origin.
+` : '');
+
             return `## Synthesize Your Findings
 
 You have gathered the following facts about this code:
@@ -126,18 +148,42 @@ ${facts}
 ${evidenceSection}
 ### Tools Called
 ${toolsCalled.join(', ')}
-
+${multiSectionInstructions}
 Now write a clear, comprehensive explanation of WHY this code exists.
-Structure your answer with:
-1. **Origin** - When and by whom was this code added? (Use exact emails/names from evidence if available)
+
+**MANDATORY - HYPERLINKS REQUIRED:**
+Every commit SHA, PR number, and issue number you mention MUST be a clickable hyperlink.
+
+✅ CORRECT: Added in [ad69449](https://github.com/org/repo/commit/ad69449) by Author
+✅ CORRECT: This was part of [PR #203](https://github.com/org/repo/pull/203)
+❌ WRONG: Added in commit ad69449 by Author (missing link!)
+❌ WRONG: This was part of PR #203 (missing link!)
+
+The facts already contain markdown hyperlinks like \`[sha](url)\` - COPY these links into your answer.
+
+**Structure your answer with:**
+1. **Origin** - When and by whom was this code added? Include clickable [commit](url) links.
+   - If multiple sections: explain each with line ranges
+   - If blame differs from origin: clarify both (e.g., "Last touched by X, but originally added by Y")
 2. **Purpose** - What problem does it solve?
-3. **Context** - What PR/issue led to this?
+3. **Context** - What [PR #N](url) or [Issue #N](url) led to this?
 4. **Recommendation** - Should it be changed?
 
 DO NOT call any more tools. Write your final answer now.`;
         }
 
         // Investigation phase
+        // Check if we have blame results that might need origin verification
+        const needsOriginVerification = facts.includes('LAST TOUCH') && !facts.includes('ORIGIN');
+        const hasRefactorCommit = facts.toLowerCase().includes('refactor') ||
+                                   facts.toLowerCase().includes('cleanup') ||
+                                   facts.toLowerCase().includes('standardize');
+
+        const originHint = needsOriginVerification && hasRefactorCommit ? `
+⚠️ **IMPORTANT:** The blame commits show "refactor/cleanup" messages. These are likely NOT the true origin.
+Use \`pickaxe_search\` with a distinctive code string to find when the code was actually introduced.
+` : '';
+
         return `## Investigation Task
 
 Investigate this code:
@@ -154,7 +200,7 @@ ${this.config.selectedText}
 
 ### Known Facts
 ${facts || 'No facts gathered yet. Start by calling get_local_line_context.'}
-
+${originHint}
 ### Tools Already Called
 ${toolsCalled.length > 0 ? toolsCalled.join(', ') : 'None yet'}
 
@@ -233,9 +279,11 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             console.log(`[CTM Agent] State prompt: ~${promptTokensEstimate} tokens (${statePrompt.length} chars)`);
 
             // Make API call using provider abstraction
+            // Use higher maxTokens for synthesis phase to avoid truncation
+            const maxTokens = phase === 'synthesize' ? 8000 : 4000;
             const response = await this.provider.createMessage({
                 model: this.config.model,
-                maxTokens: 4000,
+                maxTokens,
                 systemPrompt: this.systemPrompt,
                 tools: toolsToUse.length > 0 ? toolsToUse : undefined,
                 messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content as string }))
@@ -384,66 +432,105 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
         }
 
         // Extract structured data from facts
+        // Initialize blame_commits array for multi-line selections
+        const blameCommits: any[] = [];
+
         for (const fact of facts) {
-            if (fact.id.startsWith('blame_') && !context.blame_commit) {
-                // Parse fact text: "Blame commit abc123: by Author on 2024-01-15 - "Message""
-                const shaMatch = fact.text.match(/commit ([a-f0-9]+):/i);
+            if (fact.id.startsWith('blame_') && !fact.id.includes('multi_commit')) {
+                // Parse fact text: "Blame commit [abc123](url): by Author on 2024-01-15 - "Message" [lines: 227, 228]"
+                // Handle markdown links: [sha](url) or plain sha
+                const shaMatch = fact.text.match(/commit \[?([a-f0-9]+)\]?(?:\([^)]+\))?:/i);
                 const authorMatch = fact.text.match(/by ([^<\n]+?)(?:\s+on\s+|\s*<)/);
                 const dateMatch = fact.text.match(/on (\d{4}-\d{2}-\d{2})/);
                 const messageMatch = fact.text.match(/-\s*"([^"]+)"/);
+                const linesMatch = fact.text.match(/\[lines:\s*([^\]]+)\]/);
+                const urlMatch = fact.text.match(/\[([a-f0-9]+)\]\(([^)]+)\)/);
 
                 // Get full SHA from evidence
-                const blameEvidence = evidenceByType['sha']?.find(e => e.id.includes('blame'));
-                const authorEvidence = evidenceByType['author']?.find(e => e.id.includes('blame'));
-                const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes('blame'));
+                const shortSha = shaMatch?.[1];
+                const blameEvidence = evidenceByType['sha']?.find(e => e.id.includes(shortSha || 'blame'));
+                const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(shortSha || 'blame'));
+                const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes(shortSha || 'blame'));
 
-                context.blame_commit = {
+                const blameInfo = {
                     sha: blameEvidence?.verbatim || shaMatch?.[1] || null,
                     author: authorEvidence?.verbatim || authorMatch?.[1]?.trim() || null,
                     date: timestampEvidence?.verbatim || dateMatch?.[1] || null,
                     message: messageMatch?.[1] || null,
+                    html_url: urlMatch?.[2] || null,
+                    lines: linesMatch?.[1]?.split(',').map((l: string) => parseInt(l.trim())) || null,
                     summary: fact.text
                 };
+
+                blameCommits.push(blameInfo);
+
+                // Set primary blame_commit (first one = most lines)
+                if (!context.blame_commit) {
+                    context.blame_commit = blameInfo;
+                }
             }
             if (fact.id.startsWith('pr_')) {
-                // Initialize PR object if not exists
-                if (!context.pull_request && !fact.id.includes('_body') && !fact.id.includes('_discussion')) {
-                    const match = fact.text.match(/PR #(\d+)/);
-                    const prNumber = match ? parseInt(match[1]) : null;
-
-                    // Get evidence
-                    const urlEvidence = evidenceByType['url']?.find(e => e.id.includes(`pr_${prNumber}`));
-                    const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(`pr_${prNumber}`));
-                    const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes(`pr_${prNumber}`));
-
-                    // Parse from fact text: 'PR #123: "Title" by Author (state)'
-                    const titleMatch = fact.text.match(/PR #\d+:\s*"([^"]+)"/);
-                    const stateMatch = fact.text.match(/\(([^)]+)\)$/);
-
-                    context.pull_request = {
-                        number: prNumber,
-                        title: titleMatch?.[1] || null,
-                        author: authorEvidence?.verbatim || null,
-                        state: stateMatch?.[1] || null,
-                        html_url: urlEvidence?.verbatim || null,
-                        created_at: timestampEvidence?.verbatim || null,
-                        merged_at: null, // Will be set if state is 'merged'
-                        body: null,
-                        summary: fact.text
-                    };
-
-                    // If state is merged, use created_at as merged_at approximation
-                    if (context.pull_request.state === 'merged') {
-                        context.pull_request.merged_at = context.pull_request.created_at;
+                // Skip body/discussion facts for initial PR parsing
+                if (fact.id.includes('_body') || fact.id.includes('_discussion')) {
+                    // Handle PR body from separate fact
+                    if (fact.id.includes('_body') && context.pull_request) {
+                        const bodyMatch = fact.text.match(/description:\s*(.+)/);
+                        if (bodyMatch) {
+                            context.pull_request.body = bodyMatch[1];
+                        }
                     }
+                    continue;
                 }
 
-                // Handle PR body from separate fact
-                if (fact.id.includes('_body') && context.pull_request) {
-                    const bodyMatch = fact.text.match(/description:\s*(.+)/);
-                    if (bodyMatch) {
-                        context.pull_request.body = bodyMatch[1];
-                    }
+                // Extract PR number - handle both markdown links [PR #123](url) and plain PR #123
+                const prNumMatch = fact.text.match(/PR #(\d+)/);
+                const prNumber = prNumMatch ? parseInt(prNumMatch[1]) : null;
+                if (!prNumber) continue;
+
+                // Get evidence
+                const urlEvidence = evidenceByType['url']?.find(e => e.id.includes(`pr_${prNumber}`));
+                const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(`pr_${prNumber}`));
+                const timestampEvidence = evidenceByType['timestamp']?.find(e => e.id.includes(`pr_${prNumber}`));
+
+                // Parse title - handle both formats:
+                // 1. Markdown: [PR #123](url): "Title" by Author (state)
+                // 2. Plain: PR #123: "Title" by Author (state)
+                const titleMatch = fact.text.match(/PR #\d+\]?\)?:\s*"([^"]+)"/);
+                const stateMatch = fact.text.match(/\(([^)]+)\)$/);
+                const authorMatch = fact.text.match(/by\s+([^\s(]+)/);
+
+                // Extract URL from markdown link if present
+                const urlMatch = fact.text.match(/\[PR #\d+\]\(([^)]+)\)/);
+                const prUrl = urlMatch?.[1] || urlEvidence?.verbatim || null;
+
+                const parsedPR = {
+                    number: prNumber,
+                    title: titleMatch?.[1] || null,
+                    author: authorEvidence?.verbatim || authorMatch?.[1] || null,
+                    state: stateMatch?.[1] || null,
+                    html_url: prUrl,
+                    created_at: timestampEvidence?.verbatim || null,
+                    merged_at: null,
+                    body: null,
+                    summary: fact.text
+                };
+
+                // If state is merged, use created_at as merged_at approximation
+                if (parsedPR.state === 'merged') {
+                    parsedPR.merged_at = parsedPR.created_at;
+                }
+
+                // Prefer PRs with actual state info (from get_pr) over code_section PRs
+                // Code section PRs have "(from code section lines X)" at the end
+                const isFromCodeSection = fact.text.includes('from code section');
+                const hasCompleteInfo = parsedPR.state && !isFromCodeSection;
+
+                if (!context.pull_request) {
+                    // No PR yet, use this one
+                    context.pull_request = parsedPR;
+                } else if (hasCompleteInfo && !context.pull_request.state) {
+                    // This PR has more complete info, replace
+                    context.pull_request = parsedPR;
                 }
             }
             if (fact.id.startsWith('issue_')) {
@@ -476,18 +563,26 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 });
             }
             if (fact.id.startsWith('origin_')) {
-                // Parse origin fact: "ORIGIN commit abc123: Code first added by Author on 2024-01-15"
-                const shaMatch = fact.text.match(/commit ([a-f0-9]+):/i);
+                // Parse origin fact: "ORIGIN commit [abc123](url): Code first added by Author on 2024-01-15"
+                // Handle markdown links
+                const shaMatch = fact.text.match(/commit \[?([a-f0-9]+)\]?(?:\([^)]+\))?:/i);
                 const authorMatch = fact.text.match(/by ([^<\n]+?)(?:\s+on\s+|\s*$)/);
                 const dateMatch = fact.text.match(/on (\d{4}-\d{2}-\d{2})/);
+                const urlMatch = fact.text.match(/\[([a-f0-9]+)\]\(([^)]+)\)/);
 
                 context.origin = {
                     sha: shaMatch?.[1] || null,
                     author: authorMatch?.[1]?.trim() || null,
                     date: dateMatch?.[1] || null,
+                    html_url: urlMatch?.[2] || null,
                     summary: fact.text
                 };
             }
+        }
+
+        // Add blame_commits array if multiple commits found
+        if (blameCommits.length > 1) {
+            context.blame_commits = blameCommits;
         }
 
         return context;
