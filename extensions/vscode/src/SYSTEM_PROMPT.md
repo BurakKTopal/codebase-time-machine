@@ -173,6 +173,19 @@ This was part of PR #203
 Fixed in issue #53
 ```
 
+### CRITICAL: Use Provided URLs
+
+**NEVER construct URLs manually.** Always use the `html_url` fields provided in tool responses.
+
+❌ **WRONG:** Manually building `https://github.com/org/repo/commit/{sha}` (you may make typos!)
+✅ **CORRECT:** Copy the `html_url` directly from the tool response
+
+Tool responses include ready-to-use URLs:
+- `html_url` - Full commit/PR/issue URL
+- `pr_url` - PR URL (when available)
+
+Use short SHAs for display text: `[526dc2db](https://github.com/...)`
+
 The facts you receive already contain markdown hyperlinks. **PRESERVE these links** in your answer.
 
 ---
