@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { MCPClient } from './mcpClient';
 import { CTMAgent, ProgressUpdate, InvestigationResult } from './agent';
-import { ContextPanel, ProgressCallback } from './ui/contextPanel';
+import { ContextPanel, ProgressCallback, StreamCallback } from './ui/contextPanel';
 import { detectGitHubRepo, getRelativePath } from './utils/github';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, DEFAULT_MAX_TOOL_CALLS } from './constants';
 
@@ -244,8 +244,8 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                 currentPanel = new ContextPanel();
             }
 
-            // Set up follow-up handler
-            currentPanel.setFollowUpHandler(async (question: string, onProgress: ProgressCallback) => {
+            // Set up follow-up handler with streaming support
+            currentPanel.setFollowUpHandler(async (question: string, onProgress: ProgressCallback, onStream: StreamCallback) => {
                 if (!currentAgent) {
                     throw new Error('No active investigation to follow up on');
                 }
@@ -256,7 +256,8 @@ async function handleWhyDoesThisExist(context: vscode.ExtensionContext): Promise
                     onProgress(update.message, update.percentage);
                 });
 
-                return await currentAgent.askFollowUp(question, currentSummary);
+                // Pass streaming callback to agent
+                return await currentAgent.askFollowUp(question, currentSummary, onStream);
             });
 
             currentPanel.show(summary, rawContext, context.extensionUri);

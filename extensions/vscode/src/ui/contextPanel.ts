@@ -3,7 +3,8 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from '../constants';
 import { getModelsForProvider, LLMModel } from '../providers';
 
 export type ProgressCallback = (message: string, percentage: number) => void;
-export type FollowUpHandler = (question: string, onProgress: ProgressCallback) => Promise<string>;
+export type StreamCallback = (chunk: string) => void;
+export type FollowUpHandler = (question: string, onProgress: ProgressCallback, onStream: StreamCallback) => Promise<string>;
 
 export class ContextPanel {
     private panel: vscode.WebviewPanel | undefined;
@@ -62,7 +63,11 @@ export class ContextPanel {
                         // Add user question to history
                         this.conversationHistory.push({ role: 'user', content: question });
 
-                        // Show loading state
+                        // Add empty assistant message for streaming
+                        this.conversationHistory.push({ role: 'assistant', content: '' });
+                        const assistantMsgIndex = this.conversationHistory.length - 1;
+
+                        // Show initial state
                         this.updateConversation(true, 'Processing question...', 10);
 
                         try {
@@ -71,21 +76,24 @@ export class ContextPanel {
                                 this.updateConversation(true, progressMessage, percentage);
                             };
 
-                            // Get answer from agent with progress updates
-                            const answer = await this.onFollowUp(question, onProgress);
+                            // Streaming callback to update response in real-time
+                            const onStream: StreamCallback = (chunk: string) => {
+                                this.conversationHistory[assistantMsgIndex].content += chunk;
+                                this.streamToConversation(chunk);
+                            };
 
-                            // Add answer to history
-                            this.conversationHistory.push({ role: 'assistant', content: answer });
+                            // Get answer from agent with progress and streaming
+                            const answer = await this.onFollowUp(question, onProgress, onStream);
 
-                            // Update UI
+                            // Ensure final answer is in history (in case streaming didn't capture all)
+                            this.conversationHistory[assistantMsgIndex].content = answer;
+
+                            // Update UI (removes loading state)
                             this.updateConversation(false);
                         } catch (error) {
                             console.error('[ContextPanel] Follow-up error:', error);
                             const errorMsg = error instanceof Error ? error.message : String(error);
-                            this.conversationHistory.push({
-                                role: 'assistant',
-                                content: `Error: ${errorMsg}`
-                            });
+                            this.conversationHistory[assistantMsgIndex].content = `Error: ${errorMsg}`;
                             this.updateConversation(false);
                         }
                     }
@@ -109,6 +117,18 @@ export class ContextPanel {
             isLoading: isLoading,
             loadingMessage: loadingMessage || 'Investigating...',
             percentage: percentage || 0
+        });
+    }
+
+    /**
+     * Stream a chunk of text to the conversation (for real-time updates)
+     */
+    private streamToConversation(chunk: string): void {
+        if (!this.panel) return;
+
+        this.panel.webview.postMessage({
+            command: 'streamChunk',
+            chunk: chunk
         });
     }
 
@@ -331,7 +351,8 @@ export class ContextPanel {
 
     ${context.blame_commits && context.blame_commits.length > 1 ? `
     <div class="section commit">
-        <h2>Commits (${context.blame_commits.length} commits touch selected lines)</h2>
+        <h2>Last Touched <span class="metadata">(${context.blame_commits.length} commits)</span></h2>
+        <p class="metadata" style="margin-top: -10px; margin-bottom: 15px;">These commits last modified the selected lines. For true origin, see the summary above.</p>
         ${context.blame_commits.map((bc: any) => `
         <div class="blame-commit">
             <p><strong>Commit:</strong> ${bc.html_url
@@ -347,7 +368,8 @@ export class ContextPanel {
     </div>
     ` : context.blame_commit ? `
     <div class="section commit">
-        <h2>Last Modified</h2>
+        <h2>Last Touched</h2>
+        <p class="metadata" style="margin-top: -10px; margin-bottom: 15px;">This commit last modified the selected lines. For true origin, see the summary above.</p>
         <p><strong>Commit:</strong> ${context.blame_commit.html_url
             ? `<a href="${context.blame_commit.html_url}"><code>${context.blame_commit.sha ? context.blame_commit.sha.slice(0, 7) : 'unknown'}</code></a>`
             : `<code>${context.blame_commit.sha ? context.blame_commit.sha.slice(0, 7) : 'unknown'}</code>`
@@ -363,11 +385,16 @@ export class ContextPanel {
         <h2>${context.pull_request.html_url
             ? `<a href="${context.pull_request.html_url}">Pull Request #${context.pull_request.number}</a>`
             : `Pull Request #${context.pull_request.number}`
-        }</h2>
-        <p><strong>${context.pull_request.html_url
-            ? `<a href="${context.pull_request.html_url}">${this.escapeHtml(context.pull_request.title || 'Untitled')}</a>`
-            : this.escapeHtml(context.pull_request.title || 'Untitled')
-        }</strong></p>
+        } <span class="metadata">(last touched)</span></h2>
+        ${context.pull_request.title
+            ? `<p><strong>${context.pull_request.html_url
+                ? `<a href="${context.pull_request.html_url}">${this.escapeHtml(context.pull_request.title)}</a>`
+                : this.escapeHtml(context.pull_request.title)
+            }</strong></p>`
+            : context.pull_request.html_url
+                ? `<p><a href="${context.pull_request.html_url}">View PR →</a></p>`
+                : ''
+        }
         ${context.pull_request.author ? `<p class="metadata">By: ${this.escapeHtml(context.pull_request.author)}</p>` : ''}
         ${context.pull_request.body ? `<p>${this.escapeHtml(context.pull_request.body.slice(0, 300))}${context.pull_request.body.length > 300 ? '...' : ''}</p>` : ''}
         <p class="metadata">State: ${context.pull_request.state ?
@@ -385,10 +412,15 @@ export class ContextPanel {
             ? `<a href="${issue.html_url}">Issue #${issue.number}</a>`
             : `Issue #${issue.number}`
         }</h2>
-        <p><strong>${issue.html_url
-            ? `<a href="${issue.html_url}">${this.escapeHtml(issue.title || 'Untitled')}</a>`
-            : this.escapeHtml(issue.title || 'Untitled')
-        }</strong></p>
+        ${issue.title
+            ? `<p><strong>${issue.html_url
+                ? `<a href="${issue.html_url}">${this.escapeHtml(issue.title)}</a>`
+                : this.escapeHtml(issue.title)
+            }</strong></p>`
+            : issue.html_url
+                ? `<p><a href="${issue.html_url}">View Issue →</a></p>`
+                : ''
+        }
         ${issue.author ? `<p class="metadata">By: ${this.escapeHtml(issue.author)}</p>` : ''}
         ${issue.body ? `<p>${this.escapeHtml(issue.body.slice(0, 300))}${issue.body.length > 300 ? '...' : ''}</p>` : ''}
         <p class="metadata">State: ${issue.state ?
@@ -465,13 +497,43 @@ export class ContextPanel {
             }
         });
 
+        // Track streaming state
+        let streamingContent = '';
+        let streamingElement = null;
+
         // Handle messages from extension
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (message.command === 'updateConversation') {
+                // Reset streaming state when conversation updates
+                streamingContent = '';
+                streamingElement = null;
                 updateConversation(message.history, message.isLoading, message.loadingMessage, message.percentage);
             }
+            if (message.command === 'streamChunk') {
+                handleStreamChunk(message.chunk);
+            }
         });
+
+        function handleStreamChunk(chunk) {
+            streamingContent += chunk;
+
+            // Find or create the streaming message element
+            if (!streamingElement) {
+                // Look for the last assistant message (should be empty placeholder)
+                const messages = conversation.querySelectorAll('.assistant-message');
+                if (messages.length > 0) {
+                    streamingElement = messages[messages.length - 1].querySelector('.message-content');
+                }
+            }
+
+            if (streamingElement) {
+                // Update with accumulated content (convert markdown)
+                streamingElement.innerHTML = convertMarkdownToHtml(streamingContent);
+                // Scroll to bottom
+                conversation.scrollTop = conversation.scrollHeight;
+            }
+        }
 
         function updateConversation(history, isLoading, loadingMessage, percentage) {
             let html = '';

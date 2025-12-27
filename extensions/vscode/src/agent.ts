@@ -599,9 +599,13 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
     }
 
     /**
-     * Ask a follow-up question - WITH tool support
+     * Ask a follow-up question - WITH tool support and optional streaming
      */
-    async askFollowUp(question: string, previousSummary: string): Promise<string> {
+    async askFollowUp(
+        question: string,
+        previousSummary: string,
+        onStream?: (text: string) => void
+    ): Promise<string> {
         console.log('[CTM Agent] Processing follow-up question:', question);
         console.log('[CTM Agent] Current facts:', this.factStore.getFactCount());
 
@@ -657,13 +661,17 @@ If the information you need is not available, say so - don't keep searching.`;
             // CRITICAL: Rebuild prompt each iteration with updated facts
             const prompt = buildFollowUpPrompt();
 
-            const response = await this.provider.createMessage({
+            const requestConfig = {
                 model: this.config.model,
                 maxTokens: 2000,
                 systemPrompt: this.systemPrompt,
                 tools: tools,
-                messages: [{ role: 'user', content: prompt }]
-            });
+                messages: [{ role: 'user' as const, content: prompt }]
+            };
+
+            // Use streaming if available and this might be the final response
+            // We first do a non-streaming call to check for tool usage
+            const response = await this.provider.createMessage(requestConfig);
 
             console.log(`[CTM Agent] Follow-up response: input=${response.usage.inputTokens}, output=${response.usage.outputTokens}, stop=${response.stopReason}`);
 
@@ -674,6 +682,10 @@ If the information you need is not available, say so - don't keep searching.`;
             if (toolUses.length === 0) {
                 if (textContent && textContent.type === 'text') {
                     finalResponse = textContent.text;
+                    // Stream the complete response if callback provided
+                    if (onStream) {
+                        onStream(finalResponse);
+                    }
                 }
                 break;
             }
@@ -723,23 +735,37 @@ If the information you need is not available, say so - don't keep searching.`;
             // Continue loop - prompt will be rebuilt with new facts
         }
 
-        // If we hit tool limit without a response, synthesize one
+        // If we hit tool limit without a response, synthesize one (with streaming if available)
         if (!finalResponse) {
             // Include verbatim evidence for precision answers
             const evidence = this.factStore.getEvidenceSummary();
             const evidenceSection = evidence ? `\n\nVerbatim Evidence:\n${evidence}` : '';
 
-            const synthResponse = await this.provider.createMessage({
+            const synthConfig = {
                 model: this.config.model,
                 maxTokens: 2000,
                 messages: [{
-                    role: 'user',
+                    role: 'user' as const,
                     content: `Based on these facts, answer the question: "${question}"\n\nFacts:\n${this.factStore.getFactsSummary()}${evidenceSection}`
                 }]
-            });
+            };
 
-            const textContent = synthResponse.content.find((block: LLMContentBlock) => block.type === 'text');
-            finalResponse = textContent && textContent.type === 'text' ? textContent.text : 'Unable to find additional information.';
+            if (onStream) {
+                // Use streaming for synthesis
+                let streamedText = '';
+                await this.provider.createMessageStream(synthConfig, (chunk) => {
+                    if (chunk.type === 'text_delta') {
+                        streamedText += chunk.text;
+                        onStream(chunk.text);
+                    }
+                });
+                finalResponse = streamedText || 'Unable to find additional information.';
+            } else {
+                // Non-streaming fallback
+                const synthResponse = await this.provider.createMessage(synthConfig);
+                const textContent = synthResponse.content.find((block: LLMContentBlock) => block.type === 'text');
+                finalResponse = textContent && textContent.type === 'text' ? textContent.text : 'Unable to find additional information.';
+            }
         }
 
         console.log(`[CTM Agent] Follow-up complete. Facts: ${this.factStore.getFactCount()}`);
