@@ -161,12 +161,13 @@ export class FactStore {
                     }
                 });
 
-                // Mark the oldest as the origin
-                const firstCommit = result.historical_commits[result.historical_commits.length - 1];
-                if (firstCommit) {
+                // Note: historical_commits is just recent file history, NOT true origin
+                // True origin requires pickaxe_search - don't mislabel as ORIGIN
+                const oldestSeen = result.historical_commits[result.historical_commits.length - 1];
+                if (oldestSeen) {
                     facts.push({
-                        id: `origin_${firstCommit.sha?.substring(0, 8)}`,
-                        text: `ORIGIN commit ${firstCommit.sha}: Code first added by ${firstCommit.author} on ${firstCommit.date?.substring(0, 10)}`,
+                        id: `oldest_seen_${oldestSeen.sha?.substring(0, 8)}`,
+                        text: `Oldest commit in view ${oldestSeen.sha}: by ${oldestSeen.author} on ${oldestSeen.date?.substring(0, 10)} (use pickaxe_search for true origin)`,
                         source: toolName,
                         category: 'commit'
                     });
@@ -299,11 +300,20 @@ export class FactStore {
                     });
                 });
 
-                // Mark the first result as most likely the origin
-                const first = result.commits[0];
+                // Use introduction_commit (oldest = true origin), NOT commits[0] (newest)
+                // The MCP server returns commits newest→oldest, with introduction_commit being the oldest
+                const origin = result.introduction_commit || result.commits[result.commits.length - 1];
                 facts.push({
                     id: `pickaxe_origin`,
-                    text: `PICKAXE: Code "${result.search_string || 'pattern'}" first appeared in commit ${first.sha} by ${first.author}`,
+                    text: `ORIGIN: Code "${result.search_string || 'pattern'}" first added in commit ${origin.sha} by ${origin.author} on ${origin.date?.substring(0, 10)}`,
+                    source: toolName,
+                    category: 'commit'
+                });
+
+                // Also store as proper origin fact for buildRawContextFromFacts
+                facts.push({
+                    id: `origin_${origin.sha?.substring(0, 8)}`,
+                    text: `ORIGIN commit ${origin.sha}: Code first added by ${origin.author} on ${origin.date?.substring(0, 10)}`,
                     source: toolName,
                     category: 'commit'
                 });
@@ -591,6 +601,28 @@ export class FactStore {
                     });
                 }
             });
+
+            // Specifically extract the introduction_commit (true origin) as special evidence
+            const origin = result.introduction_commit || result.commits[result.commits.length - 1];
+            if (origin) {
+                if (origin.sha) {
+                    evidence.push({
+                        id: `sha_origin`,
+                        type: 'sha',
+                        verbatim: origin.sha,
+                        source: toolName
+                    });
+                }
+                extractAuthor(origin.author, `author_origin`);
+                if (origin.date) {
+                    evidence.push({
+                        id: `timestamp_origin`,
+                        type: 'timestamp',
+                        verbatim: origin.date,
+                        source: toolName
+                    });
+                }
+            }
         }
 
         // Handle get_commit_diff

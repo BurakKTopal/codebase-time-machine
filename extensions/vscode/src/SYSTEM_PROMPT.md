@@ -42,7 +42,13 @@ Example:
 - File reformatted in 2023 (build tags changed)
 - Git blame shows 2023 commit, NOT the 2016 fix
 
-**Solution:** Always examine `historical_commits` returned by `get_local_line_context`. The older commits often contain the real story.
+**Solution:** Use `pickaxe_search` with the actual code string to find when it was first introduced.
+
+**IMPORTANT DISTINCTION:**
+- `historical_commits` from `get_local_line_context` = recent commits that touched the FILE (not necessarily your lines)
+- `pickaxe_search(code_string)` = commits that added/removed SPECIFIC CODE (true origin)
+
+If you need to know when code was **first added**, always use `pickaxe_search` with the code content. Don't rely on `historical_commits[-1]` as the "origin" - it's just the oldest commit in the recent file history window.
 
 ## Investigation Depth Guidelines
 
@@ -62,19 +68,21 @@ Example:
 | Question | Primary Tool | Why |
 |----------|-------------|-----|
 | Why does this line exist? | `get_local_line_context(history_depth=5-10)` | Gets blame + history + PR + issues in one call |
-| When was this code added? | Check historical_commits, then `trace_file_history` | Find the original introduction |
+| When was this code FIRST added? | `pickaxe_search(code_string)` | **TRUE origin** - finds commit that introduced specific code |
 | What did the commit change? | `get_commit_diff(sha)` | See actual code changes, not just message |
 | Why was the PR created? | `get_pr(number)` | Read discussions, linked issues, review comments |
 | Where is this used? | `search_github_code(query)` or grep | Find usage to understand purpose |
 | Who knows this code? | `get_code_owners(path)` | Contributors ranked by expertise |
 
+**⚠️ IMPORTANT:** For finding true origin, use `pickaxe_search` with distinctive code from the selected lines. The `historical_commits` from `get_local_line_context` only shows recent file history, NOT when specific code was introduced.
+
 ## Available Tools (33 total)
 
 **Essential Tools (use these first):**
-- `get_local_line_context` - Your primary tool for line investigation
+- `get_local_line_context` - Your primary tool for line investigation (blame + PR + issues)
+- `pickaxe_search` - **Find TRUE origin** - when specific code was first added (use this!)
 - `get_commit` - Get commit details
 - `get_commit_diff` - See actual code changes (crucial!)
-- `trace_file_history` - Find when code was added (pickaxe alternative)
 - `get_pr` - Read PR discussions
 - `get_issue` - Read issue discussions
 
