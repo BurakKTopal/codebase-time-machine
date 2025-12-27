@@ -5,7 +5,6 @@ import {
     ProgressUpdate,
     ProgressCallback,
     InvestigationResult,
-    InvestigationState,
     AgentPhase
 } from './types';
 import { getSynthesisThreshold, CORE_TOOLS } from './constants';
@@ -17,7 +16,7 @@ import {
 } from './providers';
 
 // Re-export types for backward compatibility
-export type { AgentConfig, ProgressUpdate, ProgressCallback, InvestigationResult, InvestigationState };
+export type { AgentConfig, ProgressUpdate, ProgressCallback, InvestigationResult };
 
 /**
  * CTMAgent - Orchestrates code investigation using AI and MCP tools.
@@ -405,7 +404,6 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
             rawContext,
             completionReason,
             contextQuality,
-            canContinue: completionReason !== 'natural' && contextQuality !== 'high',
             toolCallsUsed: toolCallCount,
             toolsUsed: this.factStore.getToolsCalled(),
             tokensUsed: totalInputTokens + totalOutputTokens
@@ -598,39 +596,6 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
         if (score >= 5) return 'high';
         if (score >= 3) return 'medium';
         return 'low';
-    }
-
-    /**
-     * Continue investigation with previous state
-     */
-    async continueInvestigation(previousState: InvestigationState): Promise<InvestigationResult> {
-        console.log('[CTM Agent] Continuing investigation with previous state');
-        console.log('[CTM Agent] Previous tools:', previousState.toolsUsed.join(', '));
-
-        // Restore fact context from summary (simplified - in production you'd persist facts)
-        // For now, we just continue with a fresh fact store but include the summary
-        this.factStore.clear();
-
-        // Add summary as a "meta fact"
-        this.factStore['facts'].set('previous_summary', {
-            id: 'previous_summary',
-            text: `Previous investigation found: ${previousState.summary.substring(0, 500)}...`,
-            source: 'continuation',
-            category: 'other'
-        });
-
-        // Run investigation again
-        return this.investigate();
-    }
-
-    /**
-     * Get investigation state for continuation
-     */
-    async getInvestigationState(toolsUsed: string[]): Promise<{ summary: string; toolsUsed: string[] }> {
-        return {
-            summary: this.factStore.getFactsSummary(),
-            toolsUsed
-        };
     }
 
     /**
