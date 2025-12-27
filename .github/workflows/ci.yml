@@ -88,7 +88,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
-      id-token: write  # Required for trusted publishing
+      id-token: write   # Required for trusted publishing
+      contents: read    # Required for checkout
 
     steps:
       - uses: actions/checkout@v4
