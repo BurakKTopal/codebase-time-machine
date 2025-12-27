@@ -1809,12 +1809,74 @@ async def _get_local_line_context(
             section["content"] = "\n".join(section["content"])
             section["line_range"] = f"{section['line_start']}-{section['line_end']}" if section["line_start"] != section["line_end"] else str(section["line_start"])
 
-    # Build result with accurate local blame
+
+        # AUTO-PICKAXE: Find true origin for each code section
+        # This eliminates the need for the agent to manually call pickaxe_search
+        for section in code_sections:
+            section["origin"] = None  # Will be populated if pickaxe finds origin
+            try:
+                # Extract a distinctive code string from this section
+                # Use the longest non-trivial line for better search accuracy
+                content_lines = section["content"].split("\n")
+                search_candidates = [
+                    line.strip() for line in content_lines
+                    if len(line.strip()) > 15 and not line.strip().startswith("//") and not line.strip().startswith("#")
+                ]
+                if search_candidates:
+                    # Use the longest line as it's most distinctive
+                    search_string = max(search_candidates, key=len)
+
+                    # Run pickaxe to find when this code was first introduced
+                    pickaxe_results = repo.pickaxe_search(
+                        search_string=search_string,
+                        file_path=file_path,
+                        max_commits=5,
+                        follow_renames=True,
+                    )
+
+                    if pickaxe_results:
+                        # The oldest commit is the true origin (last in the list)
+                        origin_commit = pickaxe_results[-1]
+                        origin_sha = origin_commit.sha
+
+                        # Add origin info to section
+                        section["origin"] = {
+                            "sha": origin_sha,
+                            "short_sha": origin_sha[:7],
+                            "author": origin_commit.author.name,
+                            "date": origin_commit.committed_date.isoformat(),
+                            "message": _truncate(origin_commit.subject, 100),
+                            "html_url": f"{github_base_url}/commit/{origin_sha}" if github_base_url else None,
+                            "search_string_used": search_string[:50] + "..." if len(search_string) > 50 else search_string,
+                            "is_same_as_last_modified": origin_sha == section["commit_sha"],
+                        }
+                        # Add PR info if available
+                        if hasattr(origin_commit, 'pr_number') and origin_commit.pr_number:
+                            section["origin"]["pr_number"] = origin_commit.pr_number
+                            if github_base_url:
+                                section["origin"]["pr_url"] = f"{github_base_url}/pull/{origin_commit.pr_number}"
+            except Exception as e:
+                # Pickaxe failed for this section - not critical, continue
+                section["origin_error"] = str(e)
+
+    # Build result - NOTE: blame shows LAST TOUCH, not original introduction
     result: dict[str, Any] = {
         "file_path": file_path,
         "line_range": [line_start, line_end],
         "current_content": current_content,
-        # Primary blame commit (backwards compatible)
+        # Explanation of what this data means - helps agent understand the difference
+        "interpretation": "Each code section includes both 'last_modified_by' (who last touched the code) and 'origin' (when the code was first introduced, found via auto-pickaxe). If origin differs from last_modified, the code was moved/refactored.",
+        # Primary commit that last modified these lines (clearer name)
+        "last_modified_by": {
+            "sha": primary_sha,
+            "message": primary_line.commit_message,
+            "author": primary_line.author.name,
+            "date": primary_line.committed_date.isoformat(),
+            "message_signals": _extract_message_signals(primary_line.commit_message),
+            "html_url": f"{github_base_url}/commit/{primary_sha}" if github_base_url else None,
+            "note": "This is the LAST TOUCH, not necessarily the original author",
+        },
+        # Backwards compatible alias
         "blame_commit": {
             "sha": primary_sha,
             "message": primary_line.commit_message,
@@ -1823,10 +1885,11 @@ async def _get_local_line_context(
             "message_signals": _extract_message_signals(primary_line.commit_message),
             "html_url": f"{github_base_url}/commit/{primary_sha}" if github_base_url else None,
         },
-        # ALL blame commits for multi-line selections
+        # ALL commits that last modified lines in selection (clearer name)
+        "last_modified_commits": blame_commits_list,
+        # Backwards compatible alias
         "blame_commits": blame_commits_list,
-        # Pre-analyzed code sections grouped by origin commit
-        # Each section contains consecutive lines from the same commit
+        # Pre-analyzed code sections grouped by last-touch commit
         "code_sections": code_sections,
         "historical_commits": [],
         "pull_request": None,

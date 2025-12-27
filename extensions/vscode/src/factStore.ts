@@ -98,10 +98,19 @@ export class FactStore {
                 ? `https://github.com/${result.github_remote.owner}/${result.github_remote.repo}`
                 : null;
 
+            // Include the interpretation note from the MCP tool (explains last-touch vs origin)
+            if (result.interpretation) {
+                facts.push({
+                    id: 'interpretation',
+                    text: result.interpretation,
+                    source: toolName,
+                    category: 'other'
+                });
+            }
+
             // Handle pre-analyzed code_sections (preferred - gives structured breakdown)
-            // NOTE: code_sections shows LAST TOUCH commits, NOT when code was originally introduced
             if (result.code_sections && result.code_sections.length > 0) {
-                // Add a structured overview for the agent with clear "last touched" labeling
+                // Add a structured overview for the agent
                 if (result.code_sections.length > 1) {
                     const overview = result.code_sections.map((section: any) => {
                         const commitRef = section.html_url
@@ -110,26 +119,18 @@ export class FactStore {
                         const prRef = section.pr_url && section.pr_number
                             ? ` via [PR #${section.pr_number}](${section.pr_url})`
                             : section.pr_number ? ` via PR #${section.pr_number}` : '';
-                        return `• Lines ${section.line_range}: LAST TOUCHED by ${commitRef} (${section.author}, ${section.date?.substring(0, 10)})${prRef}`;
+                        return `• Lines ${section.line_range}: Last modified by ${commitRef} (${section.author}, ${section.date?.substring(0, 10)})${prRef}`;
                     }).join('\n');
 
                     facts.push({
                         id: 'code_sections_overview',
-                        text: `CODE SECTIONS BREAKDOWN (⚠️ shows LAST TOUCH, not origin - use pickaxe_search for true origin):\n${overview}`,
-                        source: toolName,
-                        category: 'other'
-                    });
-
-                    // Add a warning about blame vs origin
-                    facts.push({
-                        id: 'blame_origin_warning',
-                        text: `⚠️ WARNING: The commits above show who LAST TOUCHED each line, NOT when code was originally introduced. For true origin, use pickaxe_search with distinctive code strings.`,
+                        text: `CODE SECTIONS (last modified by):\n${overview}`,
                         source: toolName,
                         category: 'other'
                     });
                 }
 
-                // Add detailed facts for each section with clear "last touched" labeling
+                // Add detailed facts for each section
                 const seenPRs = new Set<number>();
                 result.code_sections.forEach((section: any, idx: number) => {
                     const commitRef = section.html_url
@@ -141,10 +142,23 @@ export class FactStore {
 
                     facts.push({
                         id: `section_${idx}_${section.commit_short_sha}`,
-                        text: `Section ${idx + 1} (lines ${section.line_range}): LAST TOUCHED by ${commitRef} (${section.author}, ${section.date?.substring(0, 10)}) - "${section.message?.split('\n')[0]?.substring(0, 60)}"${prRef}`,
+                        text: `Section ${idx + 1} (lines ${section.line_range}): Last modified by ${commitRef} (${section.author}, ${section.date?.substring(0, 10)}) - "${section.message?.split('\n')[0]?.substring(0, 60)}"${prRef}`,
                         source: toolName,
                         category: 'commit'
                     });
+
+                    // Handle origin data from auto-pickaxe (if present)
+                    if (section.origin && !section.origin.is_same_as_last_modified) {
+                        const originRef = section.origin.html_url
+                            ? `[${section.origin.short_sha}](${section.origin.html_url})`
+                            : section.origin.short_sha;
+                        facts.push({
+                            id: `origin_${idx}_${section.origin.short_sha}`,
+                            text: `Origin of lines ${section.line_range}: First added by ${originRef} (${section.origin.author}, ${section.origin.date?.substring(0, 10)}) - "${section.origin.message}"`,
+                            source: toolName,
+                            category: 'commit'
+                        });
+                    }
 
                     // Also create PR facts for PRs found in sections (for UI display)
                     if (section.pr_number && !seenPRs.has(section.pr_number)) {
@@ -159,9 +173,36 @@ export class FactStore {
                         });
                     }
                 });
+            } else if (result.last_modified_commits && result.last_modified_commits.length > 0) {
+                // Use last_modified_commits (new field name) if available
+                result.last_modified_commits.forEach((bc: any, idx: number) => {
+                    const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
+                    const commitRef = commitUrl
+                        ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
+                        : bc.sha?.substring(0, 8);
+                    const prRef = bc.pr_url && bc.pr_number
+                        ? ` (via [PR #${bc.pr_number}](${bc.pr_url}))`
+                        : bc.pr_number ? ` (via PR #${bc.pr_number})` : '';
+                    const linesInfo = bc.lines ? ` [lines: ${bc.lines.join(', ')}]` : '';
+
+                    facts.push({
+                        id: `blame_${bc.sha?.substring(0, 8)}`,
+                        text: `Last modified by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"${prRef}${linesInfo}`,
+                        source: toolName,
+                        category: 'commit'
+                    });
+                });
+
+                if (result.last_modified_commits.length > 1) {
+                    facts.push({
+                        id: 'blame_multi_commit_note',
+                        text: `Note: ${result.last_modified_commits.length} different commits last modified the selected lines`,
+                        source: toolName,
+                        category: 'other'
+                    });
+                }
             } else if (result.blame_commits && result.blame_commits.length > 0) {
-                // Fallback to blame_commits if code_sections not available
-                // NOTE: These are LAST TOUCH commits, not necessarily the origin
+                // Fallback to blame_commits for backwards compatibility
                 result.blame_commits.forEach((bc: any, idx: number) => {
                     const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
                     const commitRef = commitUrl
@@ -174,23 +215,26 @@ export class FactStore {
 
                     facts.push({
                         id: `blame_${bc.sha?.substring(0, 8)}`,
-                        text: `LAST TOUCHED by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"${prRef}${linesInfo}`,
+                        text: `Last modified by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"${prRef}${linesInfo}`,
                         source: toolName,
                         category: 'commit'
                     });
                 });
-
-                if (result.blame_commits.length > 1) {
-                    facts.push({
-                        id: 'blame_multi_commit_note',
-                        text: `Note: ${result.blame_commits.length} different commits LAST TOUCHED the selected lines (⚠️ use pickaxe_search for true origin)`,
-                        source: toolName,
-                        category: 'other'
-                    });
-                }
+            } else if (result.last_modified_by) {
+                // Use last_modified_by (new field name)
+                const bc = result.last_modified_by;
+                const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
+                const commitRef = commitUrl
+                    ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
+                    : bc.sha?.substring(0, 8);
+                facts.push({
+                    id: `blame_${bc.sha?.substring(0, 8)}`,
+                    text: `Last modified by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"`,
+                    source: toolName,
+                    category: 'commit'
+                });
             } else if (result.blame_commit) {
-                // Fallback to single blame_commit for backwards compatibility
-                // NOTE: This is the LAST TOUCH commit, not necessarily the origin
+                // Fallback to blame_commit for backwards compatibility
                 const bc = result.blame_commit;
                 const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
                 const commitRef = commitUrl
@@ -198,7 +242,7 @@ export class FactStore {
                     : bc.sha?.substring(0, 8);
                 facts.push({
                     id: `blame_${bc.sha?.substring(0, 8)}`,
-                    text: `LAST TOUCHED by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}" (⚠️ may not be origin - use pickaxe_search to verify)`,
+                    text: `Last modified by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"`,
                     source: toolName,
                     category: 'commit'
                 });
