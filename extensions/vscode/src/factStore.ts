@@ -20,7 +20,7 @@ export interface Fact {
  */
 export interface Evidence {
     id: string;           // Unique identifier (e.g., "author_abc123")
-    type: 'author' | 'committer' | 'timestamp' | 'sha' | 'url';
+    type: 'email' | 'author' | 'committer' | 'timestamp' | 'sha' | 'url';
     verbatim: string;     // Exact value: "John Doe <john@example.com>"
     source: string;       // Tool that produced this
 }

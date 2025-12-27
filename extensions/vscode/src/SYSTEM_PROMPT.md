@@ -103,6 +103,13 @@ When you see a blame commit that says "refactor", "cleanup", "standardize", or a
 
 **⚠️ PR Details:** If you see "details not available" for a PR, ALWAYS call `get_pr(number)` to fetch the full PR title, description, state, and discussions before mentioning it in your answer.
 
+**⚠️ Issue Detection:** PR titles and commit messages often contain issue references! Look for patterns like:
+- `"#123 fix bug"` or `"fix #123"` → Issue #123
+- `"123 standardize binding"` → Issue #123 (number at start of title)
+- `"Fixes issue 456"` or `"Closes #456"` → Issue #456
+
+When you spot these patterns, **ALWAYS call `get_issue(number)`** to fetch the linked issue. Issues contain the original problem statement and motivation - crucial for answering "why does this code exist?"
+
 ## Available Tools (33 total)
 
 **Essential Tools (use these first):**

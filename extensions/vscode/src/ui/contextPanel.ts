@@ -411,8 +411,6 @@ export class ContextPanel {
     </div>
 
     <div id="continue-section" class="continue-section" style="display: ${this.canContinue ? 'block' : 'none'};">
-        <h3>Investigation Incomplete</h3>
-        <p>The agent reached its tool call limit. Some context may be missing.</p>
         <button id="continueButton">Continue Investigating</button>
     </div>
 
@@ -628,6 +626,10 @@ export class ContextPanel {
         function convertMarkdownToHtml(text) {
             if (!text) return '';
             let html = text;
+            // Headers
+            html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+            html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+            html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
             // Bold
             html = html.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
             // Italic
@@ -636,6 +638,8 @@ export class ContextPanel {
             html = html.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, '<pre><code>$1</code></pre>');
             // Inline code
             html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+            // Links - IMPORTANT for clickable commits/PRs/issues
+            html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
             // Line breaks
             html = html.replace(/\\n/g, '<br>');
             return html;
