@@ -107,9 +107,11 @@ export class FactStore {
             // PR
             if (result.pull_request) {
                 const pr = result.pull_request;
+                // Include state in the fact text so it can be parsed by buildRawContextFromFacts
+                const stateStr = pr.state ? ` (${pr.state})` : '';
                 facts.push({
                     id: `pr_${pr.number}`,
-                    text: `PR #${pr.number}: "${pr.title}" by ${pr.author}`,
+                    text: `PR #${pr.number}: "${pr.title || 'Untitled'}" by ${pr.author}${stateStr}`,
                     source: toolName,
                     category: 'pr'
                 });
@@ -126,9 +128,11 @@ export class FactStore {
             // Linked issues
             if (result.linked_issues && result.linked_issues.length > 0) {
                 result.linked_issues.forEach((issue: any) => {
+                    // Include state in the fact text so it can be parsed by buildRawContextFromFacts
+                    const stateStr = issue.state ? ` (${issue.state})` : '';
                     facts.push({
                         id: `issue_${issue.number}`,
-                        text: `Issue #${issue.number}: "${issue.title}"`,
+                        text: `Issue #${issue.number}: "${issue.title || 'Untitled'}"${stateStr}`,
                         source: toolName,
                         category: 'issue'
                     });
