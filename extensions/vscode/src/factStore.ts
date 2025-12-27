@@ -276,11 +276,12 @@ export class FactStore {
                 result.linked_issues.forEach((issue: any) => {
                     const issueUrl = issue.html_url || (githubBaseUrl ? `${githubBaseUrl}/issues/${issue.number}` : null);
                     const issueRef = issueUrl ? `[Issue #${issue.number}](${issueUrl})` : `Issue #${issue.number}`;
-                    // Include state in the fact text so it can be parsed by buildRawContextFromFacts
+                    // Include state and author in the fact text so it can be parsed by buildRawContextFromFacts
                     const stateStr = issue.state ? ` (${issue.state})` : '';
+                    const authorStr = issue.author ? ` by ${issue.author}` : '';
                     facts.push({
                         id: `issue_${issue.number}`,
-                        text: `${issueRef}: "${issue.title || 'Untitled'}"${stateStr}`,
+                        text: `${issueRef}: "${issue.title || 'Untitled'}"${authorStr}${stateStr}`,
                         source: toolName,
                         category: 'issue'
                     });

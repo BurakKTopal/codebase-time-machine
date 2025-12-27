@@ -51,7 +51,14 @@ export class CTMAgent {
         const path = require('path');
         const systemPromptPath = path.join(__dirname, 'SYSTEM_PROMPT.md');
         try {
-            this.systemPrompt = fs.readFileSync(systemPromptPath, 'utf-8');
+            let prompt = fs.readFileSync(systemPromptPath, 'utf-8');
+
+            // Inject current date so the agent knows what year it is
+            const today = new Date();
+            const dateStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+            prompt += `\n\n---\n\n**Current Date:** ${dateStr}\n`;
+
+            this.systemPrompt = prompt;
             console.log(`[CTM Agent] Loaded system prompt: ${this.systemPrompt.length} chars`);
         } catch (error) {
             console.error('[CTM Agent] Could not load SYSTEM_PROMPT.md:', error);
@@ -502,9 +509,20 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 // Parse title - handle both formats:
                 // 1. Markdown: [PR #123](url): "Title" by Author (state)
                 // 2. Plain: PR #123: "Title" by Author (state)
+                // 3. Code section: [PR #123](url): "Commit message" by Author (from code section lines X-Y)
                 const titleMatch = fact.text.match(/PR #\d+\]?\)?:\s*"([^"]+)"/);
-                const stateMatch = fact.text.match(/\(([^)]+)\)$/);
-                const authorMatch = fact.text.match(/by\s+([^\s(]+)/);
+
+                // Check if this is from a code section (has different format)
+                const isFromCodeSection = fact.text.includes('from code section');
+
+                // For state: match (merged), (open), (closed) but NOT (from code section...)
+                // State appears right before " by Author" or at end, as a single word in parens
+                const stateMatch = isFromCodeSection ? null : fact.text.match(/\((merged|open|closed)\)/i);
+
+                // For author: match the LAST "by Author" pattern (after the title quotes)
+                // Use a more specific pattern: " by AuthorName (" or " by AuthorName$"
+                // For code sections: pattern is `" by Author (from code section`
+                const authorMatch = fact.text.match(/" by ([^(]+?)\s*\(/);
 
                 // Extract URL from markdown link if present
                 const urlMatch = fact.text.match(/\[PR #\d+\]\(([^)]+)\)/);
@@ -513,7 +531,7 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 const parsedPR = {
                     number: prNumber,
                     title: titleMatch?.[1] || null,
-                    author: authorEvidence?.verbatim || authorMatch?.[1] || null,
+                    author: authorEvidence?.verbatim || authorMatch?.[1]?.trim() || null,
                     state: stateMatch?.[1] || null,
                     html_url: prUrl,
                     created_at: timestampEvidence?.verbatim || null,
@@ -528,8 +546,6 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 }
 
                 // Prefer PRs with actual state info (from get_pr) over code_section PRs
-                // Code section PRs have "(from code section lines X)" at the end
-                const isFromCodeSection = fact.text.includes('from code section');
                 const hasCompleteInfo = parsedPR.state && !isFromCodeSection;
 
                 if (!context.pull_request) {
@@ -556,15 +572,19 @@ Call a tool to gather more facts, or write your final synthesis if you have enou
                 const authorEvidence = evidenceByType['author']?.find(e => e.id.includes(`issue_${issueNumber}`));
 
                 // Parse from fact text: 'Issue #123: "Title" by Author (state)'
-                const titleMatch = fact.text.match(/Issue #\d+:\s*"([^"]+)"/);
-                const stateMatch = fact.text.match(/\(([^)]+)\)$/);
+                const titleMatch = fact.text.match(/Issue #\d+\]?\)?:\s*"([^"]+)"/);
+                const authorMatch = fact.text.match(/" by ([^(]+?)\s*\(/);
+                const stateMatch = fact.text.match(/\((open|closed)\)/i);
+
+                // Extract URL from markdown link if present
+                const urlMatch = fact.text.match(/\[Issue #\d+\]\(([^)]+)\)/);
 
                 context.linked_issues.push({
                     number: issueNumber,
                     title: titleMatch?.[1] || null,
-                    author: authorEvidence?.verbatim || null,
+                    author: authorEvidence?.verbatim || authorMatch?.[1]?.trim() || null,
                     state: stateMatch?.[1] || null,
-                    html_url: urlEvidence?.verbatim || null,
+                    html_url: urlMatch?.[1] || urlEvidence?.verbatim || null,
                     body: null, // Will be set from _body fact if it exists
                     summary: fact.text
                 });

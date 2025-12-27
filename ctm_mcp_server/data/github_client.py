@@ -166,6 +166,38 @@ class GitHubClient:
 
             return response.json()
 
+    async def _graphql_request(self, query: str, variables: dict | None = None) -> dict:
+        """Make a GraphQL API request.
+
+        Args:
+            query: GraphQL query string.
+            variables: Query variables.
+
+        Returns:
+            JSON response data.
+
+        Raises:
+            GitHubClientError: On API errors.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.github.com/graphql",
+                headers=self._headers,
+                json={"query": query, "variables": variables or {}},
+                timeout=30.0,
+            )
+
+            if response.status_code == 401:
+                raise GitHubClientError("GraphQL requires authentication")
+            if response.status_code >= 400:
+                raise GitHubClientError(f"GraphQL error {response.status_code}: {response.text}")
+
+            data = response.json()
+            if "errors" in data:
+                raise GitHubClientError(f"GraphQL errors: {data['errors']}")
+
+            return data.get("data", {})
+
     def _repo_path(self, path: str) -> str:
         """Build repo-specific API path."""
         if not self.owner or not self.repo:
@@ -480,6 +512,64 @@ class GitHubClient:
         pattern = r"(?:fixes?|closes?|resolves?)\s+#(\d+)"
         matches = re.findall(pattern, body, re.IGNORECASE)
         return [int(m) for m in matches]
+
+    # GraphQL query for linked issues (REST Timeline API doesn't include issue numbers)
+    _GRAPHQL_LINKED_ISSUES = """
+        query($owner: String!, $repo: String!, $prNumber: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $prNumber) {
+              closingIssuesReferences(first: 10) {
+                nodes { number }
+              }
+            }
+          }
+        }
+    """
+
+    async def get_pr_linked_issues(self, pr_number: int) -> list[int]:
+        """Get issues linked to a PR via GitHub's Development sidebar.
+
+        Uses the GraphQL API to find closingIssuesReferences which are issues
+        linked to the PR (not just mentioned in text).
+
+        Args:
+            pr_number: PR number.
+
+        Returns:
+            List of linked issue numbers.
+        """
+        # Check cache first
+        cached = self._cache_get("github:get_pr_linked_issues", pr_number)
+        if cached is not None:
+            return cached
+
+        linked_issues: list[int] = []
+
+        try:
+            data = await self._graphql_request(
+                self._GRAPHQL_LINKED_ISSUES,
+                {"owner": self.owner, "repo": self.repo, "prNumber": pr_number},
+            )
+
+            pr_data = data.get("repository", {}).get("pullRequest", {})
+            nodes = pr_data.get("closingIssuesReferences", {}).get("nodes", [])
+
+            for node in nodes:
+                issue_num = node.get("number")
+                if issue_num and issue_num != pr_number:
+                    linked_issues.append(issue_num)
+
+        except Exception:
+            # GraphQL API may fail, fall back gracefully
+            pass
+
+        # Deduplicate and cache
+        linked_issues = list(set(linked_issues))
+        self._cache_set(
+            "github:get_pr_linked_issues", pr_number, value=linked_issues, ttl=self.TTL_SHORT
+        )
+
+        return linked_issues
 
     async def get_repo_info(self) -> dict:
         """Get repository information.

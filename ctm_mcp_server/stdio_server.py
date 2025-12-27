@@ -1719,6 +1719,8 @@ async def _get_local_line_context(
         commit_lines[sha].append(line.line_number)
 
         if sha not in commit_info:
+            # Filter out PR number from issue_numbers - PR #230 shouldn't appear as issue #230
+            filtered_issues = [n for n in (line.issue_numbers or []) if n != line.pr_number]
             commit_info[sha] = {
                 "sha": sha,
                 "message": line.commit_message,
@@ -1726,7 +1728,7 @@ async def _get_local_line_context(
                 "date": line.committed_date.isoformat(),
                 "message_signals": _extract_message_signals(line.commit_message),
                 "pr_number": line.pr_number,
-                "issue_numbers": line.issue_numbers,
+                "issue_numbers": filtered_issues,
             }
 
     if not commit_counts:
@@ -1739,7 +1741,7 @@ async def _get_local_line_context(
 
     # Primary blame commit is the one that touched most of the requested lines
     primary_sha = max(commit_counts, key=commit_counts.get)  # type: ignore
-    primary_line = next(l for l in blame_result.lines if l.commit_sha == primary_sha)
+    primary_line = next(bl for bl in blame_result.lines if bl.commit_sha == primary_sha)
 
     # Build blame_commits array with ALL unique commits, ordered by line count
     blame_commits_list = []
@@ -1959,15 +1961,15 @@ async def _get_local_line_context(
             prs = await client.search_prs_for_commit(primary_sha)
 
             if prs and len(prs) > 0:
-                pr = prs[0]
-                pr_number = pr["number"] if isinstance(pr, dict) else pr.number
+                # search_prs_for_commit returns list of PR numbers (integers)
+                pr_number = prs[0]
                 pr_detail = await client.get_pull_request(pr_number)
 
                 result["pull_request"] = {
                     "number": pr_number,
                     "title": pr_detail.title,
                     "body": _truncate(pr_detail.body or "", 500),
-                    "author": pr_detail.user.login if pr_detail.user else "",
+                    "author": pr_detail.author.login if pr_detail.author else "",
                     "state": pr_detail.state,
                     "relevant_discussions": [],
                     "review_summary": None,
@@ -1988,10 +1990,20 @@ async def _get_local_line_context(
                     except Exception:
                         pass
 
-                # Find linked issues
-                issue_refs = _extract_issue_references(
-                    (pr_detail.body or "") + " " + primary_line.commit_message
+                # Find linked issues from multiple sources:
+                # 1. Text-based: Parse PR title, body, and commit message for issue references
+                issue_refs_text = _extract_issue_references(
+                    (pr_detail.title or "") + " " + (pr_detail.body or "") + " " + primary_line.commit_message
                 )
+                # 2. API-based: Get issues linked via GitHub's Development sidebar
+                try:
+                    issue_refs_api = await client.get_pr_linked_issues(pr_number)
+                except Exception:
+                    issue_refs_api = []
+
+                # Combine and deduplicate, excluding the PR number itself
+                issue_refs = list(set(issue_refs_text + issue_refs_api))
+                issue_refs = [n for n in issue_refs if n != pr_number]
 
                 for issue_num in issue_refs[:3]:
                     try:
@@ -1999,8 +2011,11 @@ async def _get_local_line_context(
                         result["linked_issues"].append({
                             "number": issue_num,
                             "title": issue.title,
+                            "body": issue.body[:500] if issue.body else None,
+                            "author": issue.author.login if issue.author else None,
                             "labels": [label.name for label in issue.labels],
                             "state": issue.state,
+                            "html_url": issue.html_url,
                         })
                     except Exception:
                         pass
@@ -2339,7 +2354,7 @@ async def _search_prs_for_commit(owner: str, repo: str, sha: str) -> dict[str, A
                 "number": pr_num,
                 "title": pr_detail.title,
                 "state": pr_detail.state,
-                "author": pr_detail.user.login if pr_detail.user else None,
+                "author": pr_detail.author.login if pr_detail.author else None,
                 "html_url": f"https://github.com/{owner}/{repo}/pull/{pr_num}",
                 "merged_at": pr_detail.merged_at.isoformat() if pr_detail.merged_at else None,
                 "body": _truncate(pr_detail.body or "", 300),
@@ -3328,16 +3343,15 @@ async def _get_line_context(
                 prs = await client.search_prs_for_commit(blame_commit_data["sha"])
 
                 if prs and len(prs) > 0:
-                    pr = prs[0]
-                    # Handle both dict and object formats
-                    pr_number = pr["number"] if isinstance(pr, dict) else pr.number
+                    # search_prs_for_commit returns list of PR numbers (integers)
+                    pr_number = prs[0]
                     pr_detail = await client.get_pull_request(pr_number)
 
                     result["pull_request"] = {
                         "number": pr_number,
                         "title": pr_detail.title,
                         "body": pr_detail.body or "",
-                        "author": pr_detail.user.login if pr_detail.user else "",
+                        "author": pr_detail.author.login if pr_detail.author else "",
                         "state": pr_detail.state,
                         "relevant_discussions": [],
                         "review_summary": None,
@@ -3358,10 +3372,20 @@ async def _get_line_context(
                         reviews = await client.get_pr_reviews(pr_number)
                         result["pull_request"]["review_summary"] = _summarize_reviews(reviews)
 
-                    # 5. Find linked issues
-                    issue_refs = _extract_issue_references(
-                        pr_detail.body + " " + blame_commit_data["message"]
+                    # 5. Find linked issues from multiple sources:
+                    # a. Text-based: Parse PR title, body, and commit message
+                    issue_refs_text = _extract_issue_references(
+                        (pr_detail.title or "") + " " + (pr_detail.body or "") + " " + blame_commit_data["message"]
                     )
+                    # b. API-based: Get issues linked via GitHub's Development sidebar
+                    try:
+                        issue_refs_api = await client.get_pr_linked_issues(pr_number)
+                    except Exception:
+                        issue_refs_api = []
+
+                    # Combine and deduplicate, excluding the PR number itself
+                    issue_refs = list(set(issue_refs_text + issue_refs_api))
+                    issue_refs = [n for n in issue_refs if n != pr_number]
 
                     for issue_num in issue_refs[:3]:
                         try:
@@ -3370,8 +3394,11 @@ async def _get_line_context(
                                 {
                                     "number": issue_num,
                                     "title": issue.title,
+                                    "body": issue.body[:500] if issue.body else None,
+                                    "author": issue.author.login if issue.author else None,
                                     "labels": [label.name for label in issue.labels],
                                     "state": issue.state,
+                                    "html_url": issue.html_url,
                                 }
                             )
                         except Exception:
@@ -3441,11 +3468,36 @@ def _filter_relevant_discussions(comments: list[dict]) -> list[dict]:
 
 
 def _extract_issue_references(text: str) -> list[int]:
-    """Extract issue numbers from text."""
+    """Extract issue numbers from text.
+
+    Detects multiple patterns:
+    - #123 (standard GitHub reference)
+    - fixes #123, closes #123, resolves #123
+    - issue 123, issue #123
+    - Leading number in PR title like "123 Fix the bug"
+    """
     import re
 
-    matches = re.findall(r"#(\d+)", text)
-    return [int(m) for m in matches]
+    issues: set[int] = set()
+
+    # Standard #number references
+    for m in re.findall(r"#(\d+)", text):
+        issues.add(int(m))
+
+    # "fixes/closes/resolves issue 123" or "fixes/closes/resolves 123"
+    for m in re.findall(r"(?:fix(?:es)?|close[sd]?|resolve[sd]?)\s+(?:issue\s+)?#?(\d+)", text, re.I):
+        issues.add(int(m))
+
+    # "issue 123" or "issue #123"
+    for m in re.findall(r"issue\s+#?(\d+)", text, re.I):
+        issues.add(int(m))
+
+    # Leading number at start of text (common in PR titles like "123 Fix bug")
+    leading = re.match(r"^(\d+)\s+\w", text.strip())
+    if leading:
+        issues.add(int(leading.group(1)))
+
+    return list(issues)
 
 
 def _summarize_reviews(reviews: list) -> dict:
