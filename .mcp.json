@@ -2,7 +2,10 @@
   "mcpServers": {
     "ctm": {
       "command": "uv",
-      "args": ["run", "ctm_server.py"]
+      "args": [
+        "run",
+        "ctm_server.py"
+      ]
     }
   }
 }
