@@ -3,7 +3,7 @@
   "displayName": "Codebase Time Machine",
   "description": "Understand why code exists, not just what it does",
   "icon": "assets/icon.png",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "BurakKTopal",
   "repository": {
     "type": "git",
