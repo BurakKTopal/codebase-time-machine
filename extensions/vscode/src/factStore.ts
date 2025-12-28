@@ -38,6 +38,33 @@ export interface InvestigationState {
 }
 
 /**
+ * Format an array of line numbers into compact ranges.
+ * Example: [1, 2, 3, 5, 6, 10] -> "1-3, 5-6, 10"
+ */
+function formatLineRanges(lines: number[]): string {
+    if (lines.length === 0) return '';
+    if (lines.length === 1) return String(lines[0]);
+
+    const sorted = [...lines].sort((a, b) => a - b);
+    const ranges: string[] = [];
+    let rangeStart = sorted[0];
+    let rangeEnd = sorted[0];
+
+    for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i] === rangeEnd + 1) {
+            rangeEnd = sorted[i];
+        } else {
+            ranges.push(rangeStart === rangeEnd ? String(rangeStart) : `${rangeStart}-${rangeEnd}`);
+            rangeStart = sorted[i];
+            rangeEnd = sorted[i];
+        }
+    }
+    ranges.push(rangeStart === rangeEnd ? String(rangeStart) : `${rangeStart}-${rangeEnd}`);
+
+    return ranges.join(', ');
+}
+
+/**
  * FactStore - Token-efficient storage for investigation context.
  *
  * Extracts durable facts from tool outputs and discards the raw results.
@@ -147,17 +174,48 @@ export class FactStore {
                         category: 'commit'
                     });
 
-                    // Handle origin data from auto-pickaxe (if present)
-                    if (section.origin && !section.origin.is_same_as_last_modified) {
-                        const originRef = section.origin.html_url
-                            ? `[${section.origin.short_sha}](${section.origin.html_url})`
-                            : section.origin.short_sha;
-                        facts.push({
-                            id: `origin_${idx}_${section.origin.short_sha}`,
-                            text: `Origin of lines ${section.line_range}: First added by ${originRef} (${section.origin.author}, ${section.origin.date?.substring(0, 10)}) - "${section.origin.message}"`,
-                            source: toolName,
-                            category: 'commit'
-                        });
+                    // Handle origins data from auto-pickaxe (if present)
+                    // origins is now a list grouped by SHA, each with a 'lines' array
+                    if (section.origins && section.origins.length > 0) {
+                        for (const origin of section.origins) {
+                            // Skip origins that match the last-modified commit
+                            if (origin.sha === section.commit_sha) {
+                                continue;
+                            }
+
+                            const originRef = origin.html_url
+                                ? `[${origin.short_sha}](${origin.html_url})`
+                                : origin.short_sha;
+
+                            // Format line ranges compactly
+                            const lineRanges = formatLineRanges(origin.lines || []);
+
+                            // Build status note based on comment state
+                            // introduced_as_comment is now a list of line numbers
+                            let statusNote = '';
+                            if (section.is_currently_commented && origin.introduced_as_comment) {
+                                const commentLines = origin.introduced_as_comment as number[];
+                                const allLines = origin.lines as number[];
+                                if (commentLines.length === allLines.length) {
+                                    // All lines were introduced as comments
+                                    statusNote = ' [NOTE: was introduced as a comment/placeholder]';
+                                } else if (commentLines.length === 0) {
+                                    // No lines were introduced as comments
+                                    statusNote = ' [NOTE: was introduced as active code, later commented out]';
+                                } else {
+                                    // Mixed: some lines were comments, some were active code
+                                    const commentRanges = formatLineRanges(commentLines);
+                                    statusNote = ` [NOTE: lines ${commentRanges} introduced as comments, others as active code]`;
+                                }
+                            }
+
+                            facts.push({
+                                id: `origin_${idx}_${origin.short_sha}_${origin.lines?.[0] || 0}`,
+                                text: `Origin of line${origin.lines?.length > 1 ? 's' : ''} ${lineRanges}: First added by ${originRef} (${origin.author}, ${origin.date?.substring(0, 10)}) - "${origin.message}"${statusNote}`,
+                                source: toolName,
+                                category: 'commit'
+                            });
+                        }
                     }
 
                     // Also create PR facts for PRs found in sections (for UI display)
@@ -172,53 +230,6 @@ export class FactStore {
                             category: 'pr'
                         });
                     }
-                });
-            } else if (result.last_modified_commits && result.last_modified_commits.length > 0) {
-                // Use last_modified_commits (new field name) if available
-                result.last_modified_commits.forEach((bc: any, _idx: number) => {
-                    const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
-                    const commitRef = commitUrl
-                        ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
-                        : bc.sha?.substring(0, 8);
-                    const prRef = bc.pr_url && bc.pr_number
-                        ? ` (via [PR #${bc.pr_number}](${bc.pr_url}))`
-                        : bc.pr_number ? ` (via PR #${bc.pr_number})` : '';
-                    const linesInfo = bc.lines ? ` [lines: ${bc.lines.join(', ')}]` : '';
-
-                    facts.push({
-                        id: `blame_${bc.sha?.substring(0, 8)}`,
-                        text: `Last modified by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"${prRef}${linesInfo}`,
-                        source: toolName,
-                        category: 'commit'
-                    });
-                });
-
-                if (result.last_modified_commits.length > 1) {
-                    facts.push({
-                        id: 'blame_multi_commit_note',
-                        text: `Note: ${result.last_modified_commits.length} different commits last modified the selected lines`,
-                        source: toolName,
-                        category: 'other'
-                    });
-                }
-            } else if (result.blame_commits && result.blame_commits.length > 0) {
-                // Fallback to blame_commits for backwards compatibility
-                result.blame_commits.forEach((bc: any, _idx: number) => {
-                    const commitUrl = bc.html_url || (githubBaseUrl ? `${githubBaseUrl}/commit/${bc.sha}` : null);
-                    const commitRef = commitUrl
-                        ? `[${bc.sha?.substring(0, 8)}](${commitUrl})`
-                        : bc.sha?.substring(0, 8);
-                    const prRef = bc.pr_url && bc.pr_number
-                        ? ` (via [PR #${bc.pr_number}](${bc.pr_url}))`
-                        : bc.pr_number ? ` (via PR #${bc.pr_number})` : '';
-                    const linesInfo = bc.lines ? ` [lines: ${bc.lines.join(', ')}]` : '';
-
-                    facts.push({
-                        id: `blame_${bc.sha?.substring(0, 8)}`,
-                        text: `Last modified by ${commitRef}: ${bc.author} on ${bc.date?.substring(0, 10)} - "${bc.message?.split('\n')[0]?.substring(0, 80)}"${prRef}${linesInfo}`,
-                        source: toolName,
-                        category: 'commit'
-                    });
                 });
             } else if (result.last_modified_by) {
                 // Use last_modified_by (new field name)
