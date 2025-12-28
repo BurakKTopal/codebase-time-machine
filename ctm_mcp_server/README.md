@@ -161,10 +161,12 @@ Instead of simple wrappers around git commands, CTM tools are designed to **aggr
 
 **`get_line_context` / `get_local_line_context`** - The flagship tool that:
 - Runs git blame to find who last modified the code
-- Automatically runs pickaxe search to find the true origin (when code was first introduced)
+- Automatically runs **per-line pickaxe search** to find the true origin of each line (when code was first introduced)
+- Groups origins by commit SHA for efficient multi-line selections
+- Detects if code was introduced as a comment vs active code
 - Fetches the associated PR (if the commit came from a PR)
 - Extracts linked issues from PR/commit messages
-- Returns everything in one structured response
+- Returns everything in one structured response with `code_sections` containing grouped origins
 
 **This is the difference between "a git wrapper" and "a code investigation tool".**
 

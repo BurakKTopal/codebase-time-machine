@@ -1299,6 +1299,181 @@ def _strip_comment_markers(text: str) -> str:
     return text.strip()
 
 
+def _check_introduced_as_comment(
+    repo: "GitRepo",
+    origin_sha: str,
+    search_string: str,
+) -> bool | None:
+    """Check if code was introduced as a comment in the origin commit.
+
+    Args:
+        repo: GitRepo instance
+        origin_sha: The commit SHA where the code was first introduced
+        search_string: The code content to look for in the diff
+
+    Returns:
+        True if introduced as a comment/placeholder
+        False if introduced as active code
+        None if could not determine
+    """
+    try:
+        origin_diff = repo.get_diff(origin_sha)
+        if not origin_diff:
+            return None
+
+        for diff_file in origin_diff:
+            for hunk in diff_file.hunks:
+                for diff_line in hunk.lines:
+                    # Check added lines (+) that contain our search string
+                    if diff_line.startswith("+") and search_string in diff_line:
+                        # Check if the added line was a comment
+                        added_content = diff_line[1:].lstrip()
+                        if any(added_content.startswith(m) for m in ("//", "#", "/*", "* ", "*/")):
+                            return True
+                        else:
+                            return False
+        return None
+    except Exception:
+        return None
+
+
+def _get_grouped_origins(
+    repo: "GitRepo",
+    content_lines: list[str],
+    line_numbers: list[int],
+    file_path: str,
+    github_base_url: str | None,
+    max_lines: int = 25,
+    sample_size: int = 10,
+) -> list[dict[str, Any]]:
+    """Get origin information for lines, grouped by origin SHA.
+
+    For selections with ≤max_lines relevant lines, runs pickaxe for each line.
+    For larger selections, samples sample_size lines and assigns unsampled
+    lines to the origin of their nearest sampled neighbor.
+
+    Args:
+        repo: GitRepo instance
+        content_lines: List of line contents
+        line_numbers: List of corresponding line numbers
+        file_path: Path to the file being analyzed
+        github_base_url: Base URL for GitHub links (or None)
+        max_lines: Threshold for per-line vs sampled pickaxe
+        sample_size: Number of lines to sample for large selections
+
+    Returns:
+        List of origin objects, each with:
+        - sha, short_sha, author, date, message, html_url
+        - lines: list of line numbers with this origin
+        - introduced_as_comment: list of line numbers introduced as comments
+    """
+    # Filter relevant lines (non-blank)
+    relevant = [
+        (line_num, content)
+        for line_num, content in zip(line_numbers, content_lines, strict=False)
+        if content.strip()
+    ]
+
+    if not relevant:
+        return []
+
+    # Decide whether to use per-line or sampled pickaxe
+    if len(relevant) <= max_lines:
+        lines_to_analyze = relevant
+    else:
+        # Sample evenly distributed lines
+        step = max(1, len(relevant) // sample_size)
+        lines_to_analyze = relevant[::step][:sample_size]
+
+    # Cache pickaxe results by search string
+    pickaxe_cache: dict[str, list] = {}
+
+    # Map line_number -> origin info
+    line_origins: dict[int, dict[str, Any]] = {}
+
+    for line_num, content in lines_to_analyze:
+        stripped = content.strip()
+        core_content = _strip_comment_markers(stripped)
+
+        # Check cache first
+        cache_key = core_content
+        if cache_key in pickaxe_cache:
+            pickaxe_results = pickaxe_cache[cache_key]
+        else:
+            try:
+                pickaxe_results = repo.pickaxe_search(
+                    search_string=core_content,
+                    file_path=file_path,
+                    max_commits=5,
+                    follow_renames=True,
+                )
+                pickaxe_cache[cache_key] = pickaxe_results
+            except Exception:
+                pickaxe_results = []
+
+        if pickaxe_results:
+            origin_commit = pickaxe_results[-1]  # Oldest is true origin
+            origin_sha = origin_commit.sha
+
+            # Check if introduced as comment
+            introduced_as_comment = _check_introduced_as_comment(repo, origin_sha, core_content)
+
+            line_origins[line_num] = {
+                "sha": origin_sha,
+                "short_sha": origin_sha[:7],
+                "author": origin_commit.author.name,
+                "date": origin_commit.committed_date.isoformat(),
+                "message": _truncate(origin_commit.subject, 100),
+                "html_url": f"{github_base_url}/commit/{origin_sha}" if github_base_url else None,
+                "introduced_as_comment": introduced_as_comment,
+            }
+
+    # For large selections, assign unsampled lines to nearest sampled neighbor
+    if len(relevant) > max_lines:
+        sampled_line_nums = {line_num for line_num, _ in lines_to_analyze}
+        for line_num, _ in relevant:
+            if line_num not in sampled_line_nums and line_num not in line_origins:
+                # Find nearest sampled neighbor
+                nearest = min(
+                    sampled_line_nums,
+                    key=lambda x: abs(x - line_num),
+                    default=None,
+                )
+                if nearest and nearest in line_origins:
+                    line_origins[line_num] = line_origins[nearest].copy()
+
+    # Group by origin SHA
+    origins_by_sha: dict[str, dict[str, Any]] = {}
+    for line_num, origin_info in line_origins.items():
+        sha = origin_info["sha"]
+        if sha not in origins_by_sha:
+            origins_by_sha[sha] = {
+                "sha": sha,
+                "short_sha": origin_info["short_sha"],
+                "author": origin_info["author"],
+                "date": origin_info["date"],
+                "message": origin_info["message"],
+                "html_url": origin_info["html_url"],
+                "lines": [],
+                "introduced_as_comment": [],
+            }
+        origins_by_sha[sha]["lines"].append(line_num)
+        if origin_info.get("introduced_as_comment") is True:
+            origins_by_sha[sha]["introduced_as_comment"].append(line_num)
+
+    # Sort lines within each origin and convert to list
+    origins = []
+    for origin in origins_by_sha.values():
+        origin["lines"].sort()
+        origin["introduced_as_comment"].sort()
+        origins.append(origin)
+
+    # Sort origins by first line number
+    origins.sort(key=lambda o: o["lines"][0] if o["lines"] else 0)
+
+    return origins
+
+
 async def _pickaxe_search(
     repo_path: str,
     search_string: str,
@@ -1821,58 +1996,37 @@ async def _get_local_line_context(
 
         # AUTO-PICKAXE: Find true origin for each code section
         # This eliminates the need for the agent to manually call pickaxe_search
+        # Uses per-line pickaxe for accurate origin detection (≤25 lines)
+        # or sampled pickaxe for larger selections
         for section in code_sections:
-            section["origin"] = None  # Will be populated if pickaxe finds origin
+            section["origins"] = []  # List of origins grouped by SHA
+            section["is_currently_commented"] = False  # Track if section is commented code
             try:
-                # Extract a distinctive code string from this section
-                # Use the longest non-trivial line for better search accuracy
                 content_lines = section["content"].split("\n")
-                search_candidates = [
-                    line.strip()
-                    for line in content_lines
-                    if len(line.strip()) > 15
-                    and not line.strip().startswith("//")
-                    and not line.strip().startswith("#")
-                ]
-                if search_candidates:
-                    # Use the longest line as it's most distinctive
-                    search_string = max(search_candidates, key=len)
+                line_numbers = section["lines"]
 
-                    # Run pickaxe to find when this code was first introduced
-                    pickaxe_results = repo.pickaxe_search(
-                        search_string=search_string,
-                        file_path=file_path,
-                        max_commits=5,
-                        follow_renames=True,
-                    )
+                # Check if the section is currently commented
+                # A section is considered commented if ALL non-empty lines start with comment markers
+                non_empty_lines = [line.strip() for line in content_lines if line.strip()]
+                if non_empty_lines and all(
+                    line.startswith("//")
+                    or line.startswith("#")
+                    or line.startswith("/*")
+                    or line.startswith("*")
+                    for line in non_empty_lines
+                ):
+                    section["is_currently_commented"] = True
 
-                    if pickaxe_results:
-                        # The oldest commit is the true origin (last in the list)
-                        origin_commit = pickaxe_results[-1]
-                        origin_sha = origin_commit.sha
-
-                        # Add origin info to section
-                        section["origin"] = {
-                            "sha": origin_sha,
-                            "short_sha": origin_sha[:7],
-                            "author": origin_commit.author.name,
-                            "date": origin_commit.committed_date.isoformat(),
-                            "message": _truncate(origin_commit.subject, 100),
-                            "html_url": f"{github_base_url}/commit/{origin_sha}"
-                            if github_base_url
-                            else None,
-                            "search_string_used": search_string[:50] + "..."
-                            if len(search_string) > 50
-                            else search_string,
-                            "is_same_as_last_modified": origin_sha == section["commit_sha"],
-                        }
-                        # Add PR info if available
-                        if hasattr(origin_commit, "pr_number") and origin_commit.pr_number:
-                            section["origin"]["pr_number"] = origin_commit.pr_number
-                            if github_base_url:
-                                section["origin"]["pr_url"] = (
-                                    f"{github_base_url}/pull/{origin_commit.pr_number}"
-                                )
+                # Get grouped origins using per-line pickaxe
+                section["origins"] = _get_grouped_origins(
+                    repo=repo,
+                    content_lines=content_lines,
+                    line_numbers=line_numbers,
+                    file_path=file_path,
+                    github_base_url=github_base_url,
+                    max_lines=25,
+                    sample_size=10,
+                )
             except Exception as e:
                 # Pickaxe failed for this section - not critical, continue
                 section["origin_error"] = str(e)
@@ -1883,7 +2037,7 @@ async def _get_local_line_context(
         "line_range": [line_start, line_end],
         "current_content": current_content,
         # Explanation of what this data means - helps agent understand the difference
-        "interpretation": "Each code section includes both 'last_modified_by' (who last touched the code) and 'origin' (when the code was first introduced, found via auto-pickaxe). If origin differs from last_modified, the code was moved/refactored.",
+        "interpretation": "Each code section includes 'origins' (list of origin commits grouped by SHA, each with 'lines' array). The 'introduced_as_comment' field lists line numbers that were introduced as comments. Lines in 'lines' but NOT in 'introduced_as_comment' were introduced as active code.",
         # Primary commit that last modified these lines (clearer name)
         "last_modified_by": {
             "sha": primary_sha,
@@ -1903,10 +2057,6 @@ async def _get_local_line_context(
             "message_signals": _extract_message_signals(primary_line.commit_message),
             "html_url": f"{github_base_url}/commit/{primary_sha}" if github_base_url else None,
         },
-        # ALL commits that last modified lines in selection (clearer name)
-        "last_modified_commits": blame_commits_list,
-        # Backwards compatible alias
-        "blame_commits": blame_commits_list,
         # Pre-analyzed code sections grouped by last-touch commit
         "code_sections": code_sections,
         "historical_commits": [],

@@ -1,0 +1,74 @@
+name: VS Code Extension CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/vscode/**'
+      - '!extensions/vscode/*.md'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'extensions/vscode/**'
+      - '!extensions/vscode/*.md'
+
+jobs:
+  # ============================================
+  # TEST
+  # ============================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: extensions/vscode
+        run: npm ci
+
+      - name: Lint (ESLint)
+        working-directory: extensions/vscode
+        run: npm run lint
+
+      - name: Type check (TypeScript)
+        working-directory: extensions/vscode
+        run: npm run compile
+
+      - name: Run tests
+        working-directory: extensions/vscode
+        run: npm test
+
+  # ============================================
+  # PUBLISH TO VS CODE MARKETPLACE
+  # ============================================
+  publish:
+    name: Publish to Marketplace
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: extensions/vscode
+        run: npm ci
+
+      - name: Compile
+        working-directory: extensions/vscode
+        run: npm run compile
+
+      - name: Publish to Marketplace
+        working-directory: extensions/vscode
+        run: npx @vscode/vsce publish -p ${{ secrets.VSCE_PAT }}

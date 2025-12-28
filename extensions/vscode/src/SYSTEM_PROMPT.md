@@ -32,15 +32,33 @@ Lines 42-45:
   origin: [684fee6] (April 2023) - "add polynomial support"        ← TRUE origin
 ```
 
-**Always use `origin`** to report when code was first added. The `last_modified_by` may just be a cleanup commit.
+**Always use `origins`** to report when code was first added. The `last_modified_by` may just be a cleanup commit.
 
 ### The Three Types of Commits
 
 | Type | Source | What It Shows | Use For |
 |------|--------|---------------|---------|
 | **Last Modified** | `last_modified_by` / `code_sections` | Who LAST touched each line | Recent changes, refactors |
-| **Origin** | `origin` field (auto-pickaxe) | When code was FIRST added | ✅ True introduction date |
+| **Origins** | `origins` field (auto-pickaxe, per-line) | When code was FIRST added | ✅ True introduction date |
 | **Historical** | `historical_commits` | Recent file-level changes | File context, patterns |
+
+### Understanding `origins` (NEW)
+
+Each code section has an `origins` array grouped by SHA:
+```
+origins: [
+  {
+    sha: "abc123",
+    author: "Alice",
+    lines: [10, 11, 12],           // Lines with this origin
+    introduced_as_comment: [11]     // Lines introduced as comments
+  }
+]
+```
+
+- **`lines`**: Line numbers that have this origin
+- **`introduced_as_comment`**: Line numbers that were introduced as comments
+- Lines in `lines` but NOT in `introduced_as_comment` → introduced as active code (later commented)
 
 ---
 
@@ -54,7 +72,7 @@ get_local_line_context(history_depth=5-10)
 
 This single call gives you:
 - **Code sections** with blame info (last touch)
-- **Origin** for each section (true introduction) ← NEW: auto-detected!
+- **Origins** for each section (per-line true introduction) ← auto-detected with per-line accuracy!
 - **PR info** if available
 - **Linked issues** if detected
 - **Historical commits** for file context
@@ -88,9 +106,9 @@ get_issue(number)   # Original problem description
 
 ### Step 4: Verify Origin (if needed)
 
-The auto-pickaxe usually finds the correct origin, but if:
-- The origin field is missing
-- The origin looks wrong (e.g., same as last_modified for old code)
+The auto-pickaxe now runs per-line and usually finds the correct origins, but if:
+- The origins array is empty for some lines
+- An origin looks wrong (e.g., same as last_modified for old code)
 - You need to search for a specific code string
 
 Use manual pickaxe:
@@ -287,7 +305,7 @@ The `last_modified_by` commit shows who **last touched the line** - this could b
 
 | Mistake | Why It's Wrong | What To Do Instead |
 |---------|----------------|-------------------|
-| Using `last_modified_by` as the origin | It may be a refactor commit | Use the `origin` field |
+| Using `last_modified_by` as the origin | It may be a refactor commit | Use the `origins` field |
 | Only reading commit messages | Messages are often vague | Read the actual diffs |
 | Ignoring linked issues | Issues explain the "why" | Always fetch linked issues |
 | Not hyperlinking references | Users can't verify your claims | Preserve markdown links |
