@@ -1,0 +1,26 @@
+<svg width="275" height="128" viewBox="0 0 275 128" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(8, 0)">
+    <!-- Left brackets -->
+    <path d="M40 32 L20 64 L40 96" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M25 32 L5 64 L25 96" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+    <!-- Rewind arc -->
+    <path d="M50 43 A24 24 0 1 1 76 84" stroke="#F97316" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+    <!-- Central dot -->
+    <circle cx="62" cy="64" r="3" fill="#F97316"/>
+
+    <!-- Arrow -->
+    <path d="M58 46 L50 43" stroke="#F97316" stroke-width="3" stroke-linecap="round"/>
+    <path d="M54 35 L50 43" stroke="#F97316" stroke-width="3" stroke-linecap="round"/>
+
+    <!-- Vertical line on right -->
+    <path d="M97 32 L97 96" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+ 
+
+
+  <!-- Text -->
+  <text x="112" y="58" font-family="JetBrains Mono, SF Mono, Consolas, monospace" font-size="22" font-weight="600" fill="#ffffff">Codebase</text>
+  <text x="112" y="88" font-family="JetBrains Mono, SF Mono, Consolas, monospace" font-size="22" font-weight="600" fill="#F97316">Time Machine</text>
+ </g>
+</svg>

@@ -2,11 +2,12 @@
   "name": "codebase-time-machine",
   "displayName": "Codebase Time Machine",
   "description": "Understand why code exists, not just what it does",
+  "icon": "assets/icon.png",
   "version": "0.1.0",
-  "publisher": "burak",
+  "publisher": "BurakKTopal",
   "repository": {
     "type": "git",
-    "url": "https://github.com/burak/codebase-time-machine"
+    "url": "https://github.com/BurakKTopal/codebase-time-machine"
   },
   "engines": {
     "vscode": "^1.80.0"
