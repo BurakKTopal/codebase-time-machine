@@ -219,6 +219,11 @@ export class ContextPanel {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Code Context</title>
     <style>
+        :root {
+            --ctm-brand: #F97316;
+            --ctm-brand-dark: #E86305;
+            --ctm-brand-light: #FB923C;
+        }
         body {
             font-family: var(--vscode-font-family);
             font-size: var(--vscode-font-size);
@@ -232,13 +237,18 @@ export class ContextPanel {
             margin-top: 1.5em;
             margin-bottom: 0.5em;
         }
-        h1 { font-size: 1.8em; border-bottom: 2px solid var(--vscode-panel-border); padding-bottom: 0.3em; }
+        h1 { font-size: 1.8em; border-bottom: 2px solid var(--vscode-panel-border); padding-bottom: 0.3em; display: flex; align-items: center; gap: 12px; }
+        .logo {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+        }
         h2 { font-size: 1.5em; }
         h3 { font-size: 1.3em; }
         h4 { font-size: 1.1em; }
         .summary {
             background: var(--vscode-textBlockQuote-background);
-            border-left: 4px solid var(--vscode-textLink-foreground);
+            border-left: 4px solid var(--ctm-brand);
             padding: 15px;
             margin: 20px 0;
             border-radius: 4px;
@@ -255,12 +265,17 @@ export class ContextPanel {
             margin: 10px 0;
         }
         .pr {
-            border-left: 3px solid #2196F3;
+            border-left: 3px solid #22c55e;
             padding-left: 15px;
             margin: 10px 0;
         }
         .issue {
-            border-left: 3px solid #FF9800;
+            border-left: 3px solid #a855f7;
+            padding-left: 15px;
+            margin: 10px 0;
+        }
+        .location {
+            border-left: 3px solid var(--ctm-brand);
             padding-left: 15px;
             margin: 10px 0;
         }
@@ -279,10 +294,11 @@ export class ContextPanel {
             border-radius: 4px;
         }
         a {
-            color: var(--vscode-textLink-foreground);
+            color: var(--ctm-brand);
             text-decoration: none;
         }
         a:hover {
+            color: var(--ctm-brand-light);
             text-decoration: underline;
         }
         code {
@@ -340,7 +356,7 @@ export class ContextPanel {
         }
         .assistant-message {
             background: var(--vscode-textBlockQuote-background);
-            border-left: 3px solid var(--vscode-textLink-foreground);
+            border-left: 3px solid var(--ctm-brand);
             margin-right: 20px;
         }
         .message-header {
@@ -361,15 +377,14 @@ export class ContextPanel {
         }
         .progress-bar {
             height: 4px;
-            background: var(--vscode-progressBar-background);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 2px;
             overflow: hidden;
             margin-top: 8px;
         }
         .progress-fill {
             height: 100%;
-            background: var(--vscode-progressBar-background);
-            background: linear-gradient(90deg, var(--vscode-textLink-foreground), var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)));
+            background: var(--ctm-brand);
             transition: width 0.3s ease;
         }
         .input-container {
@@ -388,41 +403,67 @@ export class ContextPanel {
         }
         #followUpInput:focus {
             outline: none;
-            border-color: var(--vscode-focusBorder);
+            border-color: var(--ctm-brand);
         }
         #followUpInput:disabled {
             opacity: 0.6;
         }
         #sendButton {
             padding: 8px 16px;
-            background: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
+            background: var(--ctm-brand);
+            color: #ffffff;
             border: none;
             border-radius: 4px;
             cursor: pointer;
             font-family: inherit;
             font-size: inherit;
+            font-weight: 500;
         }
         #sendButton:hover {
-            background: var(--vscode-button-hoverBackground);
+            background: var(--ctm-brand-dark);
         }
         #sendButton:disabled {
             opacity: 0.6;
             cursor: not-allowed;
         }
+        .spinner-arrow {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+            vertical-align: middle;
+            animation: spin 1.2s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(-360deg); }
+        }
     </style>
 </head>
 <body>
-    <h1>Code Context</h1>
+    <h1>
+        <svg class="logo" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+            <rect width="128" height="128" rx="16" fill="#1e1e1e"/>
+            <g transform="translate(13, 0)">
+                <path d="M40 32 L20 64 L40 96" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+                <path d="M25 32 L5 64 L25 96" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+                <path d="M50 43 A24 24 0 1 1 76 84" stroke="#F97316" stroke-width="3" fill="none" stroke-linecap="round"/>
+                <circle cx="62" cy="64" r="3" fill="#F97316"/>
+                <path d="M58 46 L50 43" stroke="#F97316" stroke-width="3" stroke-linecap="round"/>
+                <path d="M54 35 L50 43" stroke="#F97316" stroke-width="3" stroke-linecap="round"/>
+                <path d="M97 32 L97 96" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+            </g>
+        </svg>
+        Code Context
+    </h1>
 
     <div class="summary">
         ${htmlSummary}
     </div>
 
-    <div class="section">
+    <div class="section location">
         <h2>Location</h2>
         <p><strong>File:</strong> <code>${context.file_path}</code></p>
-        <p><strong>Lines:</strong> ${context.line_range || `${context.line_start || '?'}-${context.line_end || '?'}`}</p>
+        <p><strong>Lines:</strong> ${context.line_start === context.line_end ? context.line_start : (context.line_range || `${context.line_start || '?'}-${context.line_end || '?'}`)}</p>
     </div>
 
     ${context.blame_commits && context.blame_commits.length > 1 ? `
@@ -538,7 +579,7 @@ export class ContextPanel {
     </div>
 
     <div class="metadata" style="margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--vscode-panel-border);">
-        <p>Powered by <a href="https://github.com/burak/codebase-time-machine">Codebase Time Machine</a></p>
+        <p>Powered by <a href="https://github.com/BurakKTopal/codebase-time-machine">Codebase Time Machine</a></p>
     </div>
 
     <script>
@@ -637,10 +678,11 @@ export class ContextPanel {
             if (isLoading) {
                 const displayMessage = loadingMessage || 'Investigating...';
                 const pct = percentage || 0;
+                const spinnerSvg = '<svg class="spinner-arrow" viewBox="0 0 50 50"><path d="M13 8 A17 17 0 1 1 31 38" stroke="#F97316" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M18 11 L13 8" stroke="#F97316" stroke-width="4" stroke-linecap="round"/><path d="M16 3 L13 8" stroke="#F97316" stroke-width="4" stroke-linecap="round"/></svg>';
                 html += '<div class="message assistant-message">';
                 html += '<div class="message-header">CTM</div>';
                 html += '<div class="message-content">';
-                html += '<div class="loading-text">' + displayMessage + '</div>';
+                html += '<div class="loading-text">' + spinnerSvg + displayMessage + '</div>';
                 if (pct > 0) {
                     html += '<div class="progress-bar"><div class="progress-fill" style="width: ' + pct + '%"></div></div>';
                 }
@@ -800,6 +842,11 @@ export class ContextPanel {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Code Context - Loading</title>
     <style>
+        :root {
+            --ctm-brand: #F97316;
+            --ctm-brand-dark: #E86305;
+            --ctm-brand-light: #FB923C;
+        }
         body {
             font-family: var(--vscode-font-family);
             font-size: var(--vscode-font-size);
@@ -813,10 +860,18 @@ export class ContextPanel {
             border-bottom: 2px solid var(--vscode-panel-border);
             padding-bottom: 0.3em;
             margin-bottom: 1em;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .logo {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
         }
         .loading-container {
             background: var(--vscode-textBlockQuote-background);
-            border-left: 4px solid var(--vscode-textLink-foreground);
+            border-left: 4px solid var(--ctm-brand);
             padding: 20px;
             margin: 20px 0;
             border-radius: 4px;
@@ -847,13 +902,13 @@ export class ContextPanel {
         }
         .progress-bar-container {
             height: 8px;
-            background: var(--vscode-progressBar-background);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 4px;
             overflow: hidden;
         }
         .progress-bar-fill {
             height: 100%;
-            background: linear-gradient(90deg, var(--vscode-textLink-foreground), var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)));
+            background: var(--ctm-brand);
             transition: width 0.3s ease;
             border-radius: 4px;
         }
@@ -862,19 +917,23 @@ export class ContextPanel {
             color: var(--vscode-descriptionForeground);
             font-size: 0.9em;
         }
-        .spinner {
+        .spinner-arrow {
             display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid var(--vscode-descriptionForeground);
-            border-radius: 50%;
-            border-top-color: var(--vscode-textLink-foreground);
-            animation: spin 1s linear infinite;
+            width: 18px;
+            height: 18px;
             margin-right: 8px;
             vertical-align: middle;
+            animation: spin 1.2s linear infinite;
         }
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to { transform: rotate(-360deg); }
+        }
+        a {
+            color: var(--ctm-brand);
+            text-decoration: none;
+        }
+        a:hover {
+            color: var(--ctm-brand-light);
         }
         .metadata {
             color: var(--vscode-descriptionForeground);
@@ -886,7 +945,21 @@ export class ContextPanel {
     </style>
 </head>
 <body>
-    <h1>Code Context</h1>
+    <h1>
+        <svg class="logo" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+            <rect width="128" height="128" rx="16" fill="#1e1e1e"/>
+            <g transform="translate(13, 0)">
+                <path d="M40 32 L20 64 L40 96" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+                <path d="M25 32 L5 64 L25 96" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+                <path d="M50 43 A24 24 0 1 1 76 84" stroke="#F97316" stroke-width="3" fill="none" stroke-linecap="round"/>
+                <circle cx="62" cy="64" r="3" fill="#F97316"/>
+                <path d="M58 46 L50 43" stroke="#F97316" stroke-width="3" stroke-linecap="round"/>
+                <path d="M54 35 L50 43" stroke="#F97316" stroke-width="3" stroke-linecap="round"/>
+                <path d="M97 32 L97 96" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+            </g>
+        </svg>
+        Code Context
+    </h1>
 
     <div class="loading-container">
         <div class="file-info">
@@ -896,7 +969,7 @@ export class ContextPanel {
 
         <div class="progress-section">
             <div class="progress-header">
-                <span class="progress-message" id="progressMessage"><span class="spinner"></span>Starting investigation...</span>
+                <span class="progress-message" id="progressMessage"><svg class="spinner-arrow" viewBox="0 0 50 50"><path d="M13 8 A17 17 0 1 1 31 38" stroke="#F97316" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M18 11 L13 8" stroke="#F97316" stroke-width="4" stroke-linecap="round"/><path d="M16 3 L13 8" stroke="#F97316" stroke-width="4" stroke-linecap="round"/></svg>Starting investigation...</span>
                 <span class="progress-percentage" id="progressPercentage">0%</span>
             </div>
             <div class="progress-bar-container">
@@ -907,7 +980,7 @@ export class ContextPanel {
     </div>
 
     <div class="metadata">
-        <p>Powered by <a href="https://github.com/burak/codebase-time-machine">Codebase Time Machine</a></p>
+        <p>Powered by <a href="https://github.com/BurakKTopal/codebase-time-machine">Codebase Time Machine</a></p>
     </div>
 
     <script>
@@ -919,8 +992,8 @@ export class ContextPanel {
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (message.command === 'updateProgress') {
-                // Update progress message with spinner
-                progressMessage.innerHTML = '<span class="spinner"></span>' + message.message;
+                // Update progress message with spinning arrow
+                progressMessage.innerHTML = '<svg class="spinner-arrow" viewBox="0 0 50 50"><path d="M13 8 A17 17 0 1 1 31 38" stroke="#F97316" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M18 11 L13 8" stroke="#F97316" stroke-width="4" stroke-linecap="round"/><path d="M16 3 L13 8" stroke="#F97316" stroke-width="4" stroke-linecap="round"/></svg>' + message.message;
 
                 // Update percentage
                 progressPercentage.textContent = Math.round(message.percentage) + '%';

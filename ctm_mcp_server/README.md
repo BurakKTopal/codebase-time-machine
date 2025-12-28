@@ -34,7 +34,7 @@ Then restart Claude Code. It will automatically detect and use the MCP server.
 ### Option B: Run from Source (For Development)
 
 ```bash
-git clone https://github.com/burakktopal/codebase-time-machine.git
+git clone https://github.com/BurakKTopal/codebase-time-machine.git
 cd codebase-time-machine
 uv sync
 ```

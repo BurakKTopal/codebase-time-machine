@@ -80,9 +80,9 @@ langchain = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/burakktopal/codebase-time-machine"
-Repository = "https://github.com/burakktopal/codebase-time-machine"
-Issues = "https://github.com/burakktopal/codebase-time-machine/issues"
+Homepage = "https://github.com/BurakKTopal/codebase-time-machine"
+Repository = "https://github.com/BurakKTopal/codebase-time-machine"
+Issues = "https://github.com/BurakKTopal/codebase-time-machine/issues"
 
 [project.scripts]
 ctm-server = "ctm_mcp_server.stdio_server:main"

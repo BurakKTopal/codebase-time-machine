@@ -246,4 +246,4 @@ AGPL-3.0. See [LICENSE](LICENSE).
 
 ## Issues
 
-Report at: https://github.com/burakktopal/codebase-time-machine/issues
+Report at: https://github.com/BurakKTopal/codebase-time-machine/issues
