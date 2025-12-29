@@ -58,10 +58,10 @@ jobs:
           fail_ci_if_error: false
 
   # ============================================
-  # PUBLISH TO TEST PYPI
+  # PUBLISH TO PYPI
   # ============================================
   publish:
-    name: Publish to TestPyPI
+    name: Publish to PyPI
     runs-on: ubuntu-latest
     needs: [test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -84,7 +84,5 @@ jobs:
       - name: Build package
         run: uv build
 
-      - name: Publish to TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/

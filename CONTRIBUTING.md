@@ -708,7 +708,7 @@ rm -rf dist/                    # Linux/macOS
 rmdir /s /q dist                # Windows
 
 # Build wheel and source distribution
-python -m build
+uv build
 
 # Output (version will match pyproject.toml):
 # dist/codebase_time_machine-<version>-py3-none-any.whl
@@ -959,7 +959,7 @@ async def get_line_context(
 | `uv run ruff check .` | Lint code |
 | `uv run ruff check --fix .` | Auto-fix lint issues |
 | `uv run mypy ctm_mcp_server` | Type check |
-| `python -m build` | Build package |
+| `uv build` | Build package |
 
 ### VS Code Extension
 

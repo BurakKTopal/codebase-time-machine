@@ -20,7 +20,7 @@ Codebase Time Machine (CTM) answers the question developers ask daily: *"Why doe
 ### MCP Server (Claude Code / Claude Desktop)
 
 ```bash
-pip install -i https://test.pypi.org/simple/ codebase-time-machine
+pip install codebase-time-machine
 ```
 
 Add to your MCP config:
@@ -39,7 +39,7 @@ Add to your MCP config:
 ### VS Code Extension
 
 1. Install the MCP server (above)
-2. Install extension from `.vsix` file
+2. Install extension from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=BurakKTopal.codebase-time-machine)
 3. Configure API key (Anthropic, OpenAI, or Gemini)
 4. Select code, right-click, "CTM: Why does this code exist?"
 
