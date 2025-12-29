@@ -166,6 +166,10 @@ Instead of simple wrappers around git commands, CTM tools are designed to **aggr
 - Detects if code was introduced as a comment vs active code
 - Fetches the associated PR (if the commit came from a PR)
 - Extracts linked issues from PR/commit messages
+- **Detects patterns** (commented code with active alternatives, TODOs, stale fixes)
+- **Provides quick answers** when patterns are clear (e.g., "This is unused alternative code")
+- **Shows nearby context** to detect active implementations below commented code
+- **Calculates confidence scores** with specific signals for investigation quality
 - Returns everything in one structured response with `code_sections` containing grouped origins
 
 **This is the difference between "a git wrapper" and "a code investigation tool".**
