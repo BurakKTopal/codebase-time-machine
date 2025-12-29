@@ -7,11 +7,10 @@ The MCP (Model Context Protocol) server that powers Codebase Time Machine. Use t
 ### Option A: Install from PyPI (Recommended for Users)
 
 ```bash
-# From TestPyPI (current beta)
-pip install -i https://test.pypi.org/simple/ codebase-time-machine
+pip install codebase-time-machine
 
 # Or with pipx (isolated environment)
-pipx install -i https://test.pypi.org/simple/ codebase-time-machine
+pipx install codebase-time-machine
 ```
 
 **Claude Code config** - create a `.mcp.json` file in your project root:

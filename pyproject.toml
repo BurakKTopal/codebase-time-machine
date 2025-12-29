@@ -1,8 +1,8 @@
 [project]
 name = "codebase-time-machine"
-version = "0.1.6"
+version = "0.1.0"
 description = "Understand why code exists, not just what it does - an LLM-agnostic tool server for code history analysis"
-readme = "README.md"
+readme = "ctm_mcp_server/README.md"
 requires-python = ">=3.11"
 license = {text = "AGPL-3.0"}
 authors = [
@@ -32,9 +32,6 @@ dependencies = [
     # HTTP client (GitHub API)
     "httpx>=0.27.0",
 
-    # Database & caching
-    "sqlalchemy>=2.0.0",
-
     # Code parsing
     "tree-sitter>=0.21.0",
     "tree-sitter-python>=0.21.0",
@@ -45,17 +42,8 @@ dependencies = [
     "tree-sitter-c>=0.21.0",
     "tree-sitter-cpp>=0.21.0",
 
-    # CLI
-    "typer>=0.9.0",
-    "rich>=13.7.0",
-
-    # API server
-    "fastapi>=0.109.0",
-    "uvicorn>=0.27.0",
-
     # Utilities
     "python-dotenv>=1.0.0",
-    "structlog>=24.1.0",
 ]
 
 [project.optional-dependencies]
@@ -63,20 +51,9 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
-    "black>=24.1.0",
     "ruff>=0.2.0",
     "mypy>=1.8.0",
     "pre-commit>=3.6.0",
-]
-
-search = [
-    # Vector search
-    "sqlite-vec>=0.1.0",
-    "openai>=1.10.0",
-]
-
-langchain = [
-    "langchain>=0.1.0",
 ]
 
 [project.urls]
@@ -94,10 +71,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["ctm_mcp_server"]
 
-[tool.black]
-line-length = 100
-target-version = ["py311"]
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -113,7 +86,7 @@ select = [
     "UP",     # pyupgrade
 ]
 ignore = [
-    "E501",   # line too long (handled by black)
+    "E501",   # line too long (handled by ruff format)
     "B008",   # do not perform function calls in argument defaults
 ]
 

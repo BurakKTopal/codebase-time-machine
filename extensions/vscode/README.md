@@ -22,7 +22,7 @@ Select code, right-click, and get explanations including commit context, PR disc
 ### 1. Codebase Time Machine Server
 
 ```bash
-pip install -i https://test.pypi.org/simple/ codebase-time-machine
+pip install codebase-time-machine
 ```
 
 See [MCP Server README](../../ctm_mcp_server/README.md) for details.
@@ -41,9 +41,9 @@ For private repositories: https://github.com/settings/tokens (needs `repo` scope
 
 ## Installation
 
-1. Download `codebase-time-machine-0.1.0.vsix`
-2. In VS Code: Extensions (Ctrl+Shift+X) > ... > Install from VSIX...
-3. Configure settings (see below)
+1. Install from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=BurakKTopal.codebase-time-machine)
+   - Or search "Codebase Time Machine" in VS Code Extensions (Ctrl+Shift+X)
+2. Configure settings (see below)
 
 ## Configuration
 
