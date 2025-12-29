@@ -3677,14 +3677,15 @@ def _extract_message_signals(message: str) -> list[str]:
 def _extract_function_names(content: str) -> set[str]:
     """Extract likely function/method names from code content."""
     import re
+
     names = set()
 
     # Match patterns like: .def("FunctionName", or def function_name( or function FunctionName(
     patterns_to_match = [
         r'\.def\s*\(\s*["\'](\w+)["\']',  # pybind11: .def("Name"
-        r'def\s+(\w+)\s*\(',               # Python: def name(
-        r'function\s+(\w+)\s*\(',          # JS: function name(
-        r'(?:void|int|bool|auto)\s+(\w+)\s*\(',  # C++: type name(
+        r"def\s+(\w+)\s*\(",  # Python: def name(
+        r"function\s+(\w+)\s*\(",  # JS: function name(
+        r"(?:void|int|bool|auto)\s+(\w+)\s*\(",  # C++: type name(
     ]
 
     for pattern in patterns_to_match:
@@ -3714,14 +3715,9 @@ def _detect_patterns(
         after_lines = nearby_context.get("after", {}).get("content", "")
         if after_lines:
             # Check if lines after are NOT comments (i.e., active code)
-            after_stripped = [
-                line.strip()
-                for line in after_lines.split("\n")
-                if line.strip()
-            ]
+            after_stripped = [line.strip() for line in after_lines.split("\n") if line.strip()]
             if after_stripped and not all(
-                line.startswith(("//", "#", "/*", "*", "<!--"))
-                for line in after_stripped
+                line.startswith(("//", "#", "/*", "*", "<!--")) for line in after_stripped
             ):
                 # Extract function names from commented code
                 commented_functions = _extract_function_names(all_section_content)
@@ -3732,46 +3728,56 @@ def _detect_patterns(
 
                 if shared_functions:
                     func_list = ", ".join(sorted(shared_functions))
-                    patterns.append({
-                        "type": "commented_alternative_same_function",
-                        "message": f"Commented code for '{func_list}' has ACTIVE binding immediately below",
-                        "hint": f"The function '{func_list}' IS already bound. This commented code is an UNUSED ALTERNATIVE, not missing functionality. The active binding works.",
-                    })
+                    patterns.append(
+                        {
+                            "type": "commented_alternative_same_function",
+                            "message": f"Commented code for '{func_list}' has ACTIVE binding immediately below",
+                            "hint": f"The function '{func_list}' IS already bound. This commented code is an UNUSED ALTERNATIVE, not missing functionality. The active binding works.",
+                        }
+                    )
                 else:
-                    patterns.append({
-                        "type": "commented_with_active_alternative",
-                        "message": "Commented code with active code immediately below",
-                        "hint": "This may be an unused alternative to the active implementation below",
-                    })
+                    patterns.append(
+                        {
+                            "type": "commented_with_active_alternative",
+                            "message": "Commented code with active code immediately below",
+                            "hint": "This may be an unused alternative to the active implementation below",
+                        }
+                    )
 
     # Pattern 2: TODO/FIXME/BUG markers
     all_content = "\n".join(s.get("content", "") for s in code_sections).upper()
     if any(marker in all_content for marker in ["TODO", "FIXME", "XXX", "HACK", "BUG"]):
-        patterns.append({
-            "type": "todo_or_bug_marker",
-            "message": "Code contains TODO/FIXME/BUG marker",
-            "hint": "Check if the referenced issue is resolved or if this is stale",
-        })
+        patterns.append(
+            {
+                "type": "todo_or_bug_marker",
+                "message": "Code contains TODO/FIXME/BUG marker",
+                "hint": "Check if the referenced issue is resolved or if this is stale",
+            }
+        )
 
         # Pattern 2b: TODO exists but PR claims to "fix" something
         if pr_info:
             pr_title = (pr_info.get("title") or "").lower()
             if any(kw in pr_title for kw in ["fix", "resolve", "close"]):
-                patterns.append({
-                    "type": "fix_pr_with_persistent_todo",
-                    "message": "PR claims 'fix' but TODO/FIXME still exists",
-                    "hint": "The TODO may be stale or the fix was partial",
-                })
+                patterns.append(
+                    {
+                        "type": "fix_pr_with_persistent_todo",
+                        "message": "PR claims 'fix' but TODO/FIXME still exists",
+                        "hint": "The TODO may be stale or the fix was partial",
+                    }
+                )
 
     # Pattern 3: Simple documentation comment
     if is_commented and not patterns:
         # All content is comments and no special markers
         if not any(marker in all_content for marker in ["TODO", "FIXME", "XXX"]):
-            patterns.append({
-                "type": "documentation_comment",
-                "message": "This appears to be a documentation comment",
-                "hint": "May just be explaining the code below",
-            })
+            patterns.append(
+                {
+                    "type": "documentation_comment",
+                    "message": "This appears to be a documentation comment",
+                    "hint": "May just be explaining the code below",
+                }
+            )
 
     return patterns
 
@@ -3881,9 +3887,7 @@ def _calculate_confidence(
         signals.append("✓ Found linked issues")
 
     # Check if origins were found for all sections
-    sections_with_origins = sum(
-        1 for s in code_sections if s.get("origins")
-    )
+    sections_with_origins = sum(1 for s in code_sections if s.get("origins"))
     if sections_with_origins == len(code_sections) and code_sections:
         score += 25
         signals.append("✓ Found true origin via pickaxe")
