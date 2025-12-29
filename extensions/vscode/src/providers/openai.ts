@@ -28,13 +28,14 @@ export const OPENAI_MODELS: LLMModel[] = [
         label: 'GPT-4.1',
         description: 'Balanced, great for coding ($2/$8)',
         contextWindow: 128000
-    },
-    {
-        id: 'o1',
-        label: 'o1',
-        description: 'Advanced reasoning',
-        contextWindow: 200000
     }
+    // o1 disabled - expensive reasoning model
+    // {
+    //     id: 'o1',
+    //     label: 'o1',
+    //     description: 'Advanced reasoning',
+    //     contextWindow: 200000
+    // }
 ];
 
 /**

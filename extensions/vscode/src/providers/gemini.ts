@@ -28,13 +28,14 @@ export const GEMINI_MODELS: LLMModel[] = [
         label: 'Gemini 2.5 Flash',
         description: 'Balanced with thinking ($0.15/$0.60)',
         contextWindow: 1000000
-    },
-    {
-        id: 'gemini-3-pro',
-        label: 'Gemini 3 Pro',
-        description: 'Most powerful',
-        contextWindow: 2000000
     }
+    // Gemini Pro disabled - expensive
+    // {
+    //     id: 'gemini-2.5-pro',
+    //     label: 'Gemini 2.5 Pro',
+    //     description: 'Most powerful',
+    //     contextWindow: 2000000
+    // }
 ];
 
 /**

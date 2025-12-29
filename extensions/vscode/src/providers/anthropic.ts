@@ -37,13 +37,14 @@ export const CLAUDE_MODELS: LLMModel[] = [
         label: 'Sonnet 4.5',
         description: 'Balanced ($3/$15)',
         contextWindow: 200000
-    },
-    {
-        id: 'claude-opus-4-5-20251101',
-        label: 'Opus 4.5',
-        description: 'Most capable ($15/$75)',
-        contextWindow: 200000
     }
+    // Opus 4.5 disabled - too expensive for most users ($15/$75)
+    // {
+    //     id: 'claude-opus-4-5-20251101',
+    //     label: 'Opus 4.5',
+    //     description: 'Most capable ($15/$75)',
+    //     contextWindow: 200000
+    // }
 ];
 
 /**

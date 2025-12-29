@@ -133,11 +133,11 @@ describe('Provider Models', () => {
             }
         });
 
-        it('should include haiku, sonnet, and opus models', () => {
+        it('should include haiku and sonnet models', () => {
             const ids = CLAUDE_MODELS.map(m => m.id);
             assert.ok(ids.some(id => id.includes('haiku')));
             assert.ok(ids.some(id => id.includes('sonnet')));
-            assert.ok(ids.some(id => id.includes('opus')));
+            // Note: Opus disabled to prevent high costs
         });
     });
 
@@ -151,10 +151,10 @@ describe('Provider Models', () => {
             }
         });
 
-        it('should include gpt-4 and o1 models', () => {
+        it('should include gpt-4 models', () => {
             const ids = OPENAI_MODELS.map(m => m.id);
             assert.ok(ids.some(id => id.includes('gpt-4')));
-            assert.ok(ids.some(id => id.includes('o1')));
+            // Note: o1 disabled to prevent high costs
         });
     });
 
@@ -168,10 +168,10 @@ describe('Provider Models', () => {
             }
         });
 
-        it('should include flash and pro models', () => {
+        it('should include flash models', () => {
             const ids = GEMINI_MODELS.map(m => m.id);
             assert.ok(ids.some(id => id.includes('flash')));
-            assert.ok(ids.some(id => id.includes('pro')));
+            // Note: Pro disabled to prevent high costs
         });
     });
 });

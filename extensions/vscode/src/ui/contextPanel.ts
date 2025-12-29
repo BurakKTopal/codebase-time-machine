@@ -817,6 +817,9 @@ export class ContextPanel {
             this.updateConversation(false);
 
             vscode.window.showInformationMessage(`CTM: Model changed to ${selected.label}`);
+        } else {
+            // User cancelled - re-enable input
+            this.updateConversation(false);
         }
     }
 
