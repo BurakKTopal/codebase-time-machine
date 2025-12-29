@@ -290,9 +290,13 @@ export class FactStore {
                     // Include state and author in the fact text so it can be parsed by buildRawContextFromFacts
                     const stateStr = issue.state ? ` (${issue.state})` : '';
                     const authorStr = issue.author ? ` by ${issue.author}` : '';
+                    // Include labels to surface bug fixes and other classifications
+                    const labelsStr = issue.labels && issue.labels.length > 0
+                        ? ` [${issue.labels.join(', ')}]`
+                        : '';
                     facts.push({
                         id: `issue_${issue.number}`,
-                        text: `${issueRef}: "${issue.title || 'Untitled'}"${authorStr}${stateStr}`,
+                        text: `${issueRef}: "${issue.title || 'Untitled'}"${authorStr}${stateStr}${labelsStr}`,
                         source: toolName,
                         category: 'issue'
                     });
@@ -341,6 +345,63 @@ export class FactStore {
                     });
                 }
             }
+
+            // NEW: Extract patterns_detected for quick insights
+            if (result.patterns_detected && result.patterns_detected.length > 0) {
+                result.patterns_detected.forEach((pattern: any) => {
+                    // Make same-function pattern extra prominent
+                    if (pattern.type === 'commented_alternative_same_function') {
+                        facts.push({
+                            id: `pattern_${pattern.type}`,
+                            text: `🔴 CRITICAL: ${pattern.message}. ${pattern.hint}`,
+                            source: toolName,
+                            category: 'other'
+                        });
+                    } else {
+                        facts.push({
+                            id: `pattern_${pattern.type}`,
+                            text: `⚠️ PATTERN: ${pattern.message}. Hint: ${pattern.hint}`,
+                            source: toolName,
+                            category: 'other'
+                        });
+                    }
+                });
+            }
+
+            // NEW: Extract quick_answer for TL;DR (compact, not verbose)
+            if (result.quick_answer) {
+                facts.push({
+                    id: 'quick_answer',
+                    text: `💡 TL;DR: ${result.quick_answer}`,
+                    source: toolName,
+                    category: 'other'
+                });
+            }
+
+            // NEW: Extract confidence scoring (compact)
+            if (result.confidence) {
+                const conf = result.confidence;
+                facts.push({
+                    id: 'confidence',
+                    text: `📊 Confidence: ${conf.level} (${conf.score}/100)`,
+                    source: toolName,
+                    category: 'other'
+                });
+            }
+
+            // NEW: Show nearby context - IMPORTANT for detecting active alternatives
+            if (result.nearby_context?.after?.content) {
+                const afterContent = result.nearby_context.after.content;
+                const lineRange = result.nearby_context.after.lines;
+                // Show more content so LLM can see the active binding
+                const preview = afterContent.substring(0, 300).replace(/\n/g, '\n    ');
+                facts.push({
+                    id: 'nearby_context_after',
+                    text: `📍 ACTIVE CODE BELOW (lines ${lineRange?.[0]}-${lineRange?.[1]}):\n    ${preview}${afterContent.length > 300 ? '...' : ''}`,
+                    source: toolName,
+                    category: 'code'
+                });
+            }
         }
 
         // Handle get_pr - data is nested under result.pr
@@ -380,9 +441,13 @@ export class FactStore {
             const issue = result.issue || result;
             const issueUrl = issue.html_url;
             const issueRef = issueUrl ? `[Issue #${issue.number}](${issueUrl})` : `Issue #${issue.number}`;
+            // Include labels to surface bug fixes and other classifications
+            const labels = issue.labels || [];
+            const labelNames = labels.map((l: any) => typeof l === 'string' ? l : l.name).filter(Boolean);
+            const labelsStr = labelNames.length > 0 ? ` [${labelNames.join(', ')}]` : '';
             facts.push({
                 id: `issue_${issue.number}`,
-                text: `${issueRef}: "${issue.title}" by ${issue.author} (${issue.state})`,
+                text: `${issueRef}: "${issue.title}" by ${issue.author} (${issue.state})${labelsStr}`,
                 source: toolName,
                 category: 'issue'
             });
@@ -1065,6 +1130,65 @@ export class FactStore {
 
         // We have enough if we know who wrote it AND why (PR or issue)
         return hasBlame && hasPROrIssue;
+    }
+
+    /**
+     * Get tiered summary: TL;DR, key insights, and full details.
+     * This helps the agent lead with the answer.
+     */
+    getTieredSummary(): { tldr: string | null; keyInsights: string[]; details: string } {
+        const facts = Array.from(this.facts.values());
+
+        // TL;DR: Use quick_answer if available
+        const quickAnswerFact = facts.find(f => f.id === 'quick_answer');
+        const tldr = quickAnswerFact
+            ? quickAnswerFact.text.replace('💡 SUGGESTED TL;DR: ', '')
+            : null;
+
+        // Key Insights: Most important facts (max 5)
+        const keyInsights: string[] = [];
+
+        // 1. Patterns detected (highest priority)
+        const patternFacts = facts.filter(f => f.id.startsWith('pattern_'));
+        patternFacts.forEach(f => keyInsights.push(f.text));
+
+        // 2. Confidence signals
+        const confidenceFact = facts.find(f => f.id === 'confidence');
+        if (confidenceFact) {
+            keyInsights.push(confidenceFact.text);
+        }
+
+        // 3. Origin (when code was first added)
+        const originFact = facts.find(f => f.id.startsWith('origin_'));
+        if (originFact) {
+            keyInsights.push(originFact.text);
+        }
+
+        // 4. PR or Issue context
+        const prFact = facts.find(f => f.id.startsWith('pr_') && !f.id.includes('_reason') && !f.id.includes('_body'));
+        if (prFact) {
+            keyInsights.push(prFact.text);
+        }
+
+        const issueFact = facts.find(f => f.id.startsWith('issue_') && !f.id.includes('_desc') && !f.id.includes('_body'));
+        if (issueFact) {
+            keyInsights.push(issueFact.text);
+        }
+
+        // 5. Nearby context if relevant
+        const nearbyFact = facts.find(f => f.id === 'nearby_context_after');
+        if (nearbyFact) {
+            keyInsights.push(nearbyFact.text);
+        }
+
+        // Full details
+        const details = this.getFactsSummary();
+
+        return {
+            tldr,
+            keyInsights: keyInsights.slice(0, 6),
+            details
+        };
     }
 
     /**

@@ -153,12 +153,15 @@ Tool Result (2000 tokens)          Facts (50 tokens)
 **How it works**:
 1. Tool returns raw result with `code_sections` (grouped by last-touch commit)
 2. Each section includes `origins` - per-line pickaxe results grouped by origin SHA. For long-lined sections, a uniform pickaxe grouping algorithm is realized to reduce latency.
-3. FactStore extracts key facts (commit SHAs, PR titles, issue descriptions, per-line origins)
-4. FactStore extracts evidence (emails, timestamps, URLs)
-5. Raw result is discarded
-6. Only compact facts are kept in context
+3. **Pattern detection** identifies common cases (commented code with active alternatives, TODOs, stale fixes) and provides quick answers
+4. FactStore extracts key facts (commit SHAs, PR titles, issue descriptions, per-line origins, detected patterns)
+5. FactStore extracts evidence (emails, timestamps, URLs)
+6. Raw result is discarded
+7. Only compact facts are kept in context
 
 **Per-line origin detection**: When you select multiple lines, CTM runs pickaxe for each line to find when it was truly introduced. Lines are grouped by origin SHA for efficiency.
+
+**Pattern-based shortcuts**: When the tool detects a pattern (e.g., commented code with an active implementation below), it provides a `quick_answer` so the LLM can deliver faster, more accurate responses without over-investigating simple cases.
 
 **Impact**: ~90% reduction in context accumulation.
 

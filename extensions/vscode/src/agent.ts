@@ -111,6 +111,9 @@ export class CTMAgent {
         const toolsCalled = this.factStore.getToolsCalled();
 
         if (phase === 'synthesize') {
+            // Get tiered summary for answer-first approach
+            const tieredSummary = this.factStore.getTieredSummary();
+
             // Include verbatim evidence during synthesis for precision answers
             const evidence = this.factStore.getEvidenceSummary();
             const evidenceSection = evidence ? `\n### Verbatim Evidence\n${evidence}\n` : '';
@@ -137,9 +140,15 @@ The "CODE SECTIONS BREAKDOWN" above shows which lines were LAST TOUCHED by which
 ⚠️ **Note:** The blame commit shown is the "LAST TOUCH" commit. If it says "refactor", "cleanup", or similar, use \`pickaxe_search\` to find the TRUE origin.
 ` : '');
 
+            // Build suggested TL;DR section if available (compact, not duplicated in facts)
+            const tldrSection = tieredSummary.tldr ? `
+### 💡 Suggested TL;DR
+${tieredSummary.tldr}
+` : '';
+
             return `## Synthesize Your Findings
 
-You have gathered the following facts about this code:
+**LEAD WITH THE ANSWER, NOT THE ARCHAEOLOGY.**
 
 **File:** ${this.config.filePath}
 **Lines:** ${this.config.lineStart}-${this.config.lineEnd}
@@ -148,8 +157,8 @@ You have gathered the following facts about this code:
 \`\`\`
 ${this.config.selectedText}
 \`\`\`
-
-### Known Facts
+${tldrSection}
+### Facts
 ${facts}
 ${evidenceSection}
 ### Tools Called
@@ -157,23 +166,17 @@ ${toolsCalled.join(', ')}
 ${multiSectionInstructions}
 Now write a clear, comprehensive explanation of WHY this code exists.
 
+**START WITH A TL;DR (1-2 sentences answering "why does this code exist?")**
+${tieredSummary.tldr ? `Use the suggested TL;DR above if accurate, or improve it.` : 'Write a clear conclusion first, then provide supporting evidence.'}
+
 **MANDATORY - HYPERLINKS REQUIRED:**
-Every commit SHA, PR number, and issue number you mention MUST be a clickable hyperlink.
-
-✅ CORRECT: Added in [ad69449](https://github.com/org/repo/commit/ad69449) by Author
-✅ CORRECT: This was part of [PR #203](https://github.com/org/repo/pull/203)
-❌ WRONG: Added in commit ad69449 by Author (missing link!)
-❌ WRONG: This was part of PR #203 (missing link!)
-
-The facts already contain markdown hyperlinks like \`[sha](url)\` - COPY these links into your answer.
+Every commit SHA, PR number, and issue number MUST be a clickable hyperlink. Copy links from facts.
 
 **Structure your answer with:**
-1. **Origin** - When and by whom was this code added? Include clickable [commit](url) links.
-   - If multiple sections: explain each with line ranges
-   - If blame differs from origin: clarify both (e.g., "Last touched by X, but originally added by Y")
-2. **Purpose** - What problem does it solve?
+1. **TL;DR** - One or two sentences answering "why does this code exist?"
+2. **Origin** - When and by whom? Include clickable [commit](url) links.
 3. **Context** - What [PR #N](url) or [Issue #N](url) led to this?
-4. **Recommendation** - Should it be changed?
+4. **Recommendation** - Should it be changed? (optional)
 
 DO NOT call any more tools. Write your final answer now.`;
         }

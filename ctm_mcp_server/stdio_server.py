@@ -316,6 +316,11 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Git ref (branch, tag, or SHA) to analyze. Defaults to HEAD (current branch).",
                     },
+                    "include_nearby_context": {
+                        "type": "boolean",
+                        "description": "Check lines before/after selection for related code (e.g., active alternatives to commented code). Default: true.",
+                        "default": True,
+                    },
                 },
                 "required": ["repo_path", "file_path", "line_start"],
             },
@@ -950,6 +955,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments.get("include_discussions", True),
                 arguments.get("history_depth", 1),
                 arguments.get("ref"),  # Branch/tag/SHA to analyze
+                arguments.get("include_nearby_context", True),  # Check nearby code
             )
         # GitHub API tools
         elif name == "get_github_repo":
@@ -1845,6 +1851,7 @@ async def _get_local_line_context(
     include_discussions: bool = True,
     history_depth: int = 1,
     ref: str | None = None,
+    include_nearby_context: bool = True,
 ) -> dict[str, Any]:
     """Get line context for local repo using LOCAL git blame, enriched with GitHub context.
 
@@ -1860,6 +1867,8 @@ async def _get_local_line_context(
         history_depth: Number of historical commits to analyze for finding when
             code was originally introduced (useful when recent commits only modified
             surrounding code).
+        include_nearby_context: Check lines before/after selection for related code.
+            Helps detect patterns like commented code with active alternatives.
     """
     from ctm_mcp_server.utils import detect_github_remote
 
@@ -2221,6 +2230,47 @@ async def _get_local_line_context(
         result["context_availability"]["suggestions"].append(
             "Add a GitHub remote for full PR/issue context"
         )
+
+    # === NEW: Pattern detection, quick answer, and confidence scoring ===
+
+    # Get nearby context if enabled (helps detect active alternatives)
+    nearby_context = None
+    if include_nearby_context:
+        nearby_context = _get_nearby_context(repo, file_path, line_start, line_end)
+        if nearby_context:
+            result["nearby_context"] = nearby_context
+
+    # Detect patterns (commented code, TODOs, etc.)
+    patterns = _detect_patterns(
+        code_sections,
+        nearby_context,
+        result.get("pull_request"),
+        result.get("linked_issues", []),
+    )
+    if patterns:
+        result["patterns_detected"] = patterns
+
+    # Generate quick answer if pattern is clear
+    quick_answer = _generate_quick_answer(
+        code_sections,
+        patterns,
+        result.get("pull_request"),
+        result.get("linked_issues", []),
+    )
+    if quick_answer:
+        result["quick_answer"] = quick_answer
+
+    # Calculate confidence with specific signals
+    confidence = _calculate_confidence(
+        code_sections,
+        result.get("pull_request"),
+        result.get("linked_issues", []),
+        patterns,
+        nearby_context,
+    )
+    result["confidence"] = confidence
+    # Keep backwards-compatible confidence_hint
+    result["context_availability"]["confidence_hint"] = confidence["level"]
 
     return result
 
@@ -3622,6 +3672,249 @@ def _extract_message_signals(message: str) -> list[str]:
         signals.append("has_detailed_body")
 
     return signals
+
+
+def _extract_function_names(content: str) -> set[str]:
+    """Extract likely function/method names from code content."""
+    import re
+
+    names = set()
+
+    # Match patterns like: .def("FunctionName", or def function_name( or function FunctionName(
+    patterns_to_match = [
+        r'\.def\s*\(\s*["\'](\w+)["\']',  # pybind11: .def("Name"
+        r"def\s+(\w+)\s*\(",  # Python: def name(
+        r"function\s+(\w+)\s*\(",  # JS: function name(
+        r"(?:void|int|bool|auto)\s+(\w+)\s*\(",  # C++: type name(
+    ]
+
+    for pattern in patterns_to_match:
+        for match in re.finditer(pattern, content):
+            names.add(match.group(1))
+
+    return names
+
+
+def _detect_patterns(
+    code_sections: list[dict[str, Any]],
+    nearby_context: dict[str, Any] | None,
+    pr_info: dict[str, Any] | None,
+    linked_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Detect common patterns that may inform quick answers."""
+    patterns = []
+
+    # Check if code is commented
+    is_commented = any(s.get("is_currently_commented") for s in code_sections)
+
+    # Get all content from sections
+    all_section_content = "\n".join(s.get("content", "") for s in code_sections)
+
+    # Pattern 1: Commented code with active alternative nearby
+    if is_commented and nearby_context:
+        after_lines = nearby_context.get("after", {}).get("content", "")
+        if after_lines:
+            # Check if lines after are NOT comments (i.e., active code)
+            after_stripped = [line.strip() for line in after_lines.split("\n") if line.strip()]
+            if after_stripped and not all(
+                line.startswith(("//", "#", "/*", "*", "<!--")) for line in after_stripped
+            ):
+                # Extract function names from commented code
+                commented_functions = _extract_function_names(all_section_content)
+                active_functions = _extract_function_names(after_lines)
+
+                # Check if same function appears in both
+                shared_functions = commented_functions & active_functions
+
+                if shared_functions:
+                    func_list = ", ".join(sorted(shared_functions))
+                    patterns.append(
+                        {
+                            "type": "commented_alternative_same_function",
+                            "message": f"Commented code for '{func_list}' has ACTIVE binding immediately below",
+                            "hint": f"The function '{func_list}' IS already bound. This commented code is an UNUSED ALTERNATIVE, not missing functionality. The active binding works.",
+                        }
+                    )
+                else:
+                    patterns.append(
+                        {
+                            "type": "commented_with_active_alternative",
+                            "message": "Commented code with active code immediately below",
+                            "hint": "This may be an unused alternative to the active implementation below",
+                        }
+                    )
+
+    # Pattern 2: TODO/FIXME/BUG markers
+    all_content = "\n".join(s.get("content", "") for s in code_sections).upper()
+    if any(marker in all_content for marker in ["TODO", "FIXME", "XXX", "HACK", "BUG"]):
+        patterns.append(
+            {
+                "type": "todo_or_bug_marker",
+                "message": "Code contains TODO/FIXME/BUG marker",
+                "hint": "Check if the referenced issue is resolved or if this is stale",
+            }
+        )
+
+        # Pattern 2b: TODO exists but PR claims to "fix" something
+        if pr_info:
+            pr_title = (pr_info.get("title") or "").lower()
+            if any(kw in pr_title for kw in ["fix", "resolve", "close"]):
+                patterns.append(
+                    {
+                        "type": "fix_pr_with_persistent_todo",
+                        "message": "PR claims 'fix' but TODO/FIXME still exists",
+                        "hint": "The TODO may be stale or the fix was partial",
+                    }
+                )
+
+    # Pattern 3: Simple documentation comment
+    if is_commented and not patterns:
+        # All content is comments and no special markers
+        if not any(marker in all_content for marker in ["TODO", "FIXME", "XXX"]):
+            patterns.append(
+                {
+                    "type": "documentation_comment",
+                    "message": "This appears to be a documentation comment",
+                    "hint": "May just be explaining the code below",
+                }
+            )
+
+    return patterns
+
+
+def _get_nearby_context(
+    repo: "GitRepo",
+    file_path: str,
+    line_start: int,
+    line_end: int,
+    context_lines: int = 10,
+) -> dict[str, Any]:
+    """Get lines before and after the selection for context detection."""
+    try:
+        # Get file content from working directory
+        full_path = repo.path / file_path
+        if not full_path.exists():
+            return {}
+        full_content = full_path.read_text(encoding="utf-8", errors="replace")
+        if not full_content:
+            return {}
+
+        lines = full_content.split("\n")
+        total_lines = len(lines)
+
+        # Get lines before (but not before line 1)
+        before_start = max(0, line_start - context_lines - 1)
+        before_end = line_start - 1
+        before_lines = lines[before_start:before_end] if before_end > before_start else []
+
+        # Get lines after (but not past end of file)
+        after_start = line_end
+        after_end = min(total_lines, line_end + context_lines)
+        after_lines = lines[after_start:after_end] if after_end > after_start else []
+
+        return {
+            "before": {
+                "lines": [before_start + 1, before_end] if before_lines else None,
+                "content": "\n".join(before_lines) if before_lines else None,
+            },
+            "after": {
+                "lines": [after_start + 1, after_end] if after_lines else None,
+                "content": "\n".join(after_lines) if after_lines else None,
+            },
+        }
+    except Exception:
+        return {}
+
+
+def _generate_quick_answer(
+    code_sections: list[dict[str, Any]],
+    patterns: list[dict[str, Any]],
+    pr_info: dict[str, Any] | None,
+    linked_issues: list[dict[str, Any]],
+) -> str | None:
+    """Generate a TL;DR based on detected patterns.
+
+    Returns None if the situation requires deeper investigation.
+    """
+    pattern_types = {p["type"] for p in patterns}
+    pattern_by_type = {p["type"]: p for p in patterns}
+
+    # BEST CASE: Commented code with SAME function active below
+    if "commented_alternative_same_function" in pattern_types:
+        pattern = pattern_by_type["commented_alternative_same_function"]
+        # Extract function name from the message
+        return f"This is an UNUSED ALTERNATIVE implementation. {pattern['hint']}"
+
+    # Commented code with active alternative - clear case
+    if "commented_with_active_alternative" in pattern_types:
+        return "This is commented-out code with an active implementation below. Likely an unused alternative or documentation of a different approach."
+
+    # Simple documentation comment
+    if "documentation_comment" in pattern_types:
+        return "This appears to be a documentation comment explaining nearby code."
+
+    # Fix PR with persistent TODO - interesting case
+    if "fix_pr_with_persistent_todo" in pattern_types:
+        return "A PR claimed to fix this, but a TODO/FIXME marker persists. The TODO may be stale or the fix was partial."
+
+    # Bug fix with linked issue
+    if pr_info and linked_issues:
+        pr_title = (pr_info.get("title") or "").lower()
+        if any(kw in pr_title for kw in ["fix", "bug"]):
+            issue = linked_issues[0]
+            return f"Bug fix for {issue.get('title', 'an issue')} (Issue #{issue.get('number')})."
+
+    return None  # No quick answer - needs investigation
+
+
+def _calculate_confidence(
+    code_sections: list[dict[str, Any]],
+    pr_info: dict[str, Any] | None,
+    linked_issues: list[dict[str, Any]],
+    patterns: list[dict[str, Any]],
+    nearby_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Calculate confidence score with specific signals."""
+    score = 0
+    signals = []
+
+    # Positive signals
+    if pr_info:
+        score += 25
+        signals.append("✓ Found associated PR")
+    if linked_issues:
+        score += 20
+        signals.append("✓ Found linked issues")
+
+    # Check if origins were found for all sections
+    sections_with_origins = sum(1 for s in code_sections if s.get("origins"))
+    if sections_with_origins == len(code_sections) and code_sections:
+        score += 25
+        signals.append("✓ Found true origin via pickaxe")
+    elif sections_with_origins > 0:
+        score += 15
+        signals.append(f"⚠ Found origin for {sections_with_origins}/{len(code_sections)} sections")
+
+    if nearby_context and (nearby_context.get("before") or nearby_context.get("after")):
+        score += 10
+        signals.append("✓ Nearby context available")
+
+    # Negative/warning signals from patterns
+    for p in patterns:
+        if p["type"] == "todo_or_bug_marker":
+            signals.append("⚠ Contains TODO/FIXME marker - may need verification")
+        if p["type"] == "fix_pr_with_persistent_todo":
+            score -= 10
+            signals.append("⚠ PR claims 'fix' but TODO persists - conflicting signals")
+
+    # Determine level
+    level = "high" if score >= 60 else "medium" if score >= 30 else "low"
+
+    return {
+        "score": min(100, max(0, score)),
+        "level": level,
+        "signals": signals,
+    }
 
 
 def _filter_relevant_discussions(

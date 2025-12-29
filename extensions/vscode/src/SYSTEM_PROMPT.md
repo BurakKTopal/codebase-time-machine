@@ -76,6 +76,30 @@ This single call gives you:
 - **PR info** if available
 - **Linked issues** if detected
 - **Historical commits** for file context
+- **NEW: `patterns_detected`** - common patterns that may shortcut investigation
+- **NEW: `quick_answer`** - suggested TL;DR if pattern is clear
+- **NEW: `nearby_context`** - code before/after the selection
+- **NEW: `confidence`** - score with specific signals
+
+### Using Pattern-Based Shortcuts
+
+When `patterns_detected` or `quick_answer` is present, use them to speed up investigation:
+
+| Pattern | What It Means | Action |
+|---------|---------------|--------|
+| `commented_with_active_alternative` | Commented code has active code below | The answer is likely "unused alternative to the active implementation below" |
+| `todo_or_bug_marker` | Contains TODO/FIXME/BUG | Check if referenced issue is resolved |
+| `fix_pr_with_persistent_todo` | PR claims "fix" but TODO exists | TODO may be stale or fix was partial |
+| `documentation_comment` | Simple comment, no markers | Probably just explaining nearby code |
+
+**When `quick_answer` is provided:**
+- Verify it with 1-2 tool calls
+- If it matches your investigation, use it as your TL;DR
+- Don't over-investigate simple cases
+
+**When `confidence.level` is "high":**
+- You likely have enough context
+- Consider synthesizing earlier
 
 ### Step 2: Read the Diffs
 
@@ -223,31 +247,37 @@ The facts you receive already contain markdown hyperlinks. **PRESERVE these link
 
 ## Response Structure
 
-Your final answer should be 3-5 paragraphs:
+**LEAD WITH THE ANSWER, NOT THE ARCHAEOLOGY.**
 
-### Paragraph 1: What & When
-- What is this code?
+Your final answer should start with a clear conclusion, then provide supporting evidence.
+
+### Opening: TL;DR (Required)
+Start with 1-2 sentences answering "Why does this code exist?"
+- If `quick_answer` was provided and matches your investigation, use it
+- Example: "This is commented-out code with an active implementation below. It's an unused alternative approach."
+- NOT: "In commit abc123 on July 15, 2023, developer X..."
+
+### Paragraph 1: Origin & Purpose
+- What is this code and why was it added?
 - When was it **first added**? (use **origin**, not last_modified)
 - Commit SHA **with hyperlink**, date, author
 
-### Paragraph 2: Why (The Problem)
+### Paragraph 2: Context (The Problem It Solved)
 - What problem did it solve?
 - What was broken or missing?
 - Issue/bug numbers **with hyperlinks**
 
-### Paragraph 3: How (The Solution)
+### Paragraph 3: Details (Optional)
 - How does this code solve the problem?
 - Interesting implementation details?
-- Alternatives considered?
-
-### Paragraph 4: Context (Optional)
 - Related changes or follow-ups **with hyperlinks**
-- Architectural significance
-- Dependencies or coupling
 
-### Paragraph 5: Recommendation (Optional)
+### Paragraph 4: Recommendation (Optional)
 - Should this code be modified/removed?
 - Risks or considerations?
+
+### Key Principle
+**Developers want answers, not archaeology.** Put the conclusion first. Put the commit history second. If the pattern is clear (e.g., "commented code with active alternative"), say so immediately.
 
 ---
 
@@ -255,6 +285,8 @@ Your final answer should be 3-5 paragraphs:
 
 Before providing your final answer, verify:
 
+- [ ] **Did I start with a TL;DR?** (Answer first, archaeology second)
+- [ ] **Did I use `quick_answer` if provided?** (Verify and use it)
 - [ ] Did I use **origin** (not last_modified) for the introduction date?
 - [ ] Did I read at least one commit diff?
 - [ ] Did I check PR/issue discussions (if available)?
@@ -263,7 +295,8 @@ Before providing your final answer, verify:
 - [ ] **Are ALL PRs hyperlinked?** (e.g., `[PR #123](url)` not `PR #123`)
 - [ ] **Are ALL issues hyperlinked?** (e.g., `[Issue #45](url)` not `issue #45`)
 - [ ] For multi-section selections, did I explain each section?
-- [ ] **For commented code:** Did I find WHEN it was commented out (not just origin/last_modified)?
+- [ ] **For commented code:** Did I check `nearby_context` for active alternatives?
+- [ ] **For TODO/FIXME:** Did I check if the referenced issue is resolved?
 
 ---
 
