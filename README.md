@@ -1,5 +1,9 @@
 # Codebase Time Machine
 
+[![PyPI](https://img.shields.io/pypi/v/codebase-time-machine)](https://pypi.org/project/codebase-time-machine/)
+[![VS Code](https://img.shields.io/visual-studio-marketplace/v/BurakKTopal.codebase-time-machine?label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=BurakKTopal.codebase-time-machine)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 **Understand why code exists, not just what it does.**
 
 Codebase Time Machine (CTM) answers the question developers ask daily: *"Why does this code exist?"* It traces the decision chain from code to commits, PRs, issues, and discussions.
