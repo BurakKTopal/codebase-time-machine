@@ -99,6 +99,10 @@ The `GITHUB_TOKEN` is optional for public repositories but recommended for:
 
 Get one at: https://github.com/settings/tokens (needs `repo` scope for private repos)
 
+## VS Code Extension
+
+Prefer a UI? The [VS Code Extension](https://marketplace.visualstudio.com/items?itemName=BurakKTopal.codebase-time-machine) provides right-click code investigation without needing Claude Code or Desktop. It uses this MCP server under the hood to provide tools to the AI agent. Includes follow-up questions and multi-provider support (Anthropic, OpenAI, Gemini).
+
 ## Tools Reference
 
 CTM provides 32 tools for code investigation:
