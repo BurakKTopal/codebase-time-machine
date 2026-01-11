@@ -69,8 +69,8 @@ class TestTruncate:
         from ctm_mcp_server.stdio_server import _truncate
 
         result = _truncate("This is a very long string that exceeds the limit", 20)
-        assert len(result) <= 35  # 20 + " [truncated]"
-        assert "[truncated]" in result
+        assert len(result) <= 23  # 20 + "..."
+        assert result.endswith("...")
 
     def test_truncate_default_length(self):
         """Test truncation with default length (500)."""
@@ -78,7 +78,7 @@ class TestTruncate:
 
         long_string = "x" * 600
         result = _truncate(long_string)
-        assert len(result) <= 515  # 500 + " [truncated]"
+        assert len(result) <= 503  # 500 + "..."
 
     def test_truncate_none_returns_none(self):
         """Test that None input returns None."""
