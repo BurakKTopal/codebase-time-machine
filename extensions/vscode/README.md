@@ -61,6 +61,8 @@ Search for "CTM" to find all extension settings.
 | `ctm.model` | `claude-3-5-haiku-20241022` | Model ID |
 | `ctm.maxToolCalls` | `12` | Max tool calls per investigation (3-25) |
 | `ctm.githubToken` | (empty) | GitHub token for private repos |
+| `ctm.serverCommand` | `["python", "-m", "ctm_mcp_server.stdio_server"]` | Command to start the MCP server (e.g., `["uv", "run", "python", "-m", "ctm_mcp_server.stdio_server"]` for uv) |
+| `ctm.serverPath` | (empty) | Working directory for server command (for development, set to local CTM repo path) |
 
 ## Usage
 
