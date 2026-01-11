@@ -2462,7 +2462,7 @@ def _truncate(text: str | None, max_len: int = 500) -> str | None:
         return text
     if len(text) <= max_len:
         return text
-    return text[:max_len] + "... [truncated]"
+    return text[:max_len] + "..."
 
 
 async def _get_pr(owner: str, repo: str, pr_number: int) -> dict[str, Any]:
