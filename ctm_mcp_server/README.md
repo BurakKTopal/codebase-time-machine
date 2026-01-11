@@ -1,5 +1,7 @@
 # CTM MCP Server
 
+[![Demo Video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/-dvF_4N_SOs)
+
 The MCP (Model Context Protocol) server that powers Codebase Time Machine. Use this with Claude Code, Claude Desktop, or any MCP-compatible client.
 
 ## Quick Start
@@ -13,9 +15,11 @@ pip install codebase-time-machine
 pipx install codebase-time-machine
 ```
 
+> **Note:** Install in your base Python environment (not a `.venv`) so Claude Code and Claude Desktop can access it.
+
 **Claude Code config** - create a `.mcp.json` file in your project root:
 ```json
-{
+    {
   "mcpServers": {
     "ctm": {
       "command": "python",
@@ -236,6 +240,28 @@ For optimal tool usage, add [CLAUDE.md](../CLAUDE.md) to your project. It teache
 ```bash
 python -c "import ctm_mcp_server; print('OK')"
 ```
+
+### "Module not found" in Claude Desktop (Python version mismatch)
+
+If the package is installed but Claude Desktop can't find it, the `python` command may resolve to a different Python version than the one used to install the package.
+
+**Solution:** Specify the full path to the Python executable in your config:
+
+```json
+{
+  "mcpServers": {
+    "ctm": {
+      "command": "path/to/python.exe",
+      "args": ["-m", "ctm_mcp_server.stdio_server"],
+      "env": {
+        "GITHUB_TOKEN": "your_token_here"
+      }
+    }
+  }
+}
+```
+
+To find your Python path, run `where python` (Windows) or `which python` (macOS/Linux), and use the path where you installed the package.
 
 ### "Rate limit exceeded"
 Add a `GITHUB_TOKEN` for 5000 requests/hour instead of 60.

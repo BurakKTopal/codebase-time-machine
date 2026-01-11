@@ -23,6 +23,8 @@ Codebase Time Machine (CTM) answers the question developers ask daily: *"Why doe
 
 ### MCP Server (Claude Code / Claude Desktop)
 
+[![Demo Video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/-dvF_4N_SOs)
+
 ```bash
 pip install codebase-time-machine
 ```
@@ -62,4 +64,4 @@ Both components are licensed under **AGPL-3.0**.
 | MCP Server (`ctm_mcp_server/`) | [AGPL-3.0](ctm_mcp_server/LICENSE) |
 | VS Code Extension (`extensions/vscode/`) | [AGPL-3.0](extensions/vscode/LICENSE) |
 
-Copyright 2025 Burak Kucuktopal
+Copyright 2025-2026 Burak Kucuktopal
